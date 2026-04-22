@@ -575,10 +575,11 @@ func convertOutputToMessage(output []Item, scope shared.TransportScope, transfor
 						URL: `data:image/` + imageOutputFormat + `;base64,` + *outputItem.Result,
 					},
 					TransformerMetadata: map[string]any{
-						"background":    outputItem.Background,
-						"output_format": outputItem.OutputFormat,
-						"quality":       outputItem.Quality,
-						"size":          outputItem.Size,
+						"background":     outputItem.Background,
+						"output_format":  outputItem.OutputFormat,
+						"quality":        outputItem.Quality,
+						"size":           outputItem.Size,
+						"revised_prompt": outputItem.RevisedPrompt,
 					},
 				})
 			}

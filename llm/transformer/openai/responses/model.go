@@ -387,6 +387,8 @@ type Item struct {
 
 	// Image generation fields
 
+	// Action for image generation items, e.g: generate
+	Action string `json:"action,omitempty"`
 	// Background for image generated, e.g: opaque
 	Background *string `json:"background,omitempty"`
 	// Output format for image generated, e.g: png
@@ -395,6 +397,8 @@ type Item struct {
 	Quality *string `json:"quality,omitempty"`
 	// Size for image generated, e.g: 1024x1024
 	Size *string `json:"size,omitempty"`
+	// RevisedPrompt is the provider-rewritten prompt returned for generated images.
+	RevisedPrompt *string `json:"revised_prompt,omitempty"`
 
 	// Result for image_generation_call type.
 	Result *string `json:"result,omitempty"`

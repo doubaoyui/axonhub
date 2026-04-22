@@ -187,3 +187,201 @@ func TestOutboundTransformer_TransformStream_PreservesPreviousResponseID(t *test
 	require.Equal(t, "resp_prev_123", *actual[2].PreviousResponseID)
 	require.Equal(t, llm.DoneResponse, actual[3])
 }
+
+func TestOutboundTransformer_TransformStream_ImageGenerationPartialImagePreservesRevisedPrompt(t *testing.T) {
+	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	events := []*httpclient.StreamEvent{
+		{
+			Type: "response.created",
+			Data: []byte(`{
+				"type":"response.created",
+				"response":{
+					"id":"resp_img_stream",
+					"object":"response",
+					"created_at":1700000000,
+					"model":"gpt-5.4",
+					"status":"in_progress",
+					"output":[]
+				}
+			}`),
+		},
+		{
+			Type: "response.output_item.added",
+			Data: []byte(`{
+				"type":"response.output_item.added",
+				"output_index":0,
+				"item":{
+					"id":"ig_123",
+					"type":"image_generation_call",
+					"status":"in_progress"
+				}
+			}`),
+		},
+		{
+			Type: "response.output_item.done",
+			Data: []byte(`{
+				"type":"response.output_item.done",
+				"output_index":0,
+				"item":{
+					"id":"ig_123",
+					"type":"image_generation_call",
+					"status":"completed",
+					"background":"opaque",
+					"output_format":"png",
+					"quality":"high",
+					"size":"1024x1024",
+					"revised_prompt":"A watercolor fox under moonlight"
+				}
+			}`),
+		},
+		{
+			Type: "response.image_generation_call.partial_image",
+			Data: []byte(`{
+				"type":"response.image_generation_call.partial_image",
+				"output_index":0,
+				"item_id":"ig_123",
+				"partial_image_b64":"base64data"
+			}`),
+		},
+	}
+
+	stream, err := trans.TransformStream(context.Background(), streams.SliceStream(events))
+	require.NoError(t, err)
+
+	actual, err := streams.All(stream)
+	require.NoError(t, err)
+	require.Len(t, actual, 3)
+
+	var part llm.MessageContentPart
+	var foundPart bool
+	for _, resp := range actual {
+		if resp == nil || resp == llm.DoneResponse || len(resp.Choices) == 0 {
+			continue
+		}
+		choice := resp.Choices[0]
+		if choice.Delta != nil && len(choice.Delta.Content.MultipleContent) > 0 {
+			part = choice.Delta.Content.MultipleContent[0]
+			foundPart = true
+		}
+	}
+
+	require.True(t, foundPart)
+	require.NotNil(t, part.ImageURL)
+	require.Equal(t, "data:image/png;base64,base64data", part.ImageURL.URL)
+	require.NotNil(t, part.TransformerMetadata)
+	require.Equal(t, "opaque", part.TransformerMetadata["background"])
+	require.Equal(t, "png", part.TransformerMetadata["output_format"])
+	require.Equal(t, "high", part.TransformerMetadata["quality"])
+	require.Equal(t, "1024x1024", part.TransformerMetadata["size"])
+	require.Equal(t, "A watercolor fox under moonlight", part.TransformerMetadata["revised_prompt"])
+
+	if actual[1].Choices[0].TransformerMetadata != nil {
+		if rawUpdates, ok := actual[1].Choices[0].TransformerMetadata["image_generation_item_updates"]; ok && rawUpdates != nil {
+			updates := rawUpdates.(map[string]any)
+			require.Equal(t, "A watercolor fox under moonlight", updates["ig_123"].(map[string]any)["revised_prompt"])
+		}
+	}
+	require.Equal(t, llm.DoneResponse, actual[2])
+}
+
+func TestOutboundTransformer_TransformStream_ImageGenerationPartialImageUsesTopLevelFields(t *testing.T) {
+	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	events := []*httpclient.StreamEvent{
+		{
+			Type: "response.created",
+			Data: []byte(`{
+				"type":"response.created",
+				"response":{
+					"id":"resp_img_stream2",
+					"object":"response",
+					"created_at":1700000000,
+					"model":"gpt-5.4",
+					"status":"in_progress",
+					"output":[]
+				}
+			}`),
+		},
+		{
+			Type: "response.output_item.added",
+			Data: []byte(`{
+				"type":"response.output_item.added",
+				"output_index":0,
+				"item":{
+					"id":"ig_234",
+					"type":"image_generation_call",
+					"status":"in_progress"
+				}
+			}`),
+		},
+		{
+			Type: "response.image_generation_call.partial_image",
+			Data: []byte(`{
+				"type":"response.image_generation_call.partial_image",
+				"output_index":0,
+				"item_id":"ig_234",
+				"status":"generating",
+				"background":"opaque",
+				"output_format":"png",
+				"quality":"high",
+				"size":"853x1844",
+				"revised_prompt":"a revised prompt",
+				"partial_image_b64":"base64data"
+			}`),
+		},
+	}
+
+	stream, err := trans.TransformStream(context.Background(), streams.SliceStream(events))
+	require.NoError(t, err)
+
+	actual, err := streams.All(stream)
+	require.NoError(t, err)
+	require.Len(t, actual, 3)
+
+	part := actual[1].Choices[0].Delta.Content.MultipleContent[0]
+	require.NotNil(t, part.TransformerMetadata)
+	require.Equal(t, "opaque", part.TransformerMetadata["background"])
+	require.Equal(t, "png", part.TransformerMetadata["output_format"])
+	require.Equal(t, "high", part.TransformerMetadata["quality"])
+	require.Equal(t, "853x1844", part.TransformerMetadata["size"])
+	require.Equal(t, "a revised prompt", part.TransformerMetadata["revised_prompt"])
+	require.Equal(t, llm.DoneResponse, actual[2])
+}
+
+func TestOutboundTransformer_TransformStream_ImageGenerationOutputItemDoneEmitsLateMetadataUpdate(t *testing.T) {
+	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	events := []*httpclient.StreamEvent{
+		{
+			Type: "response.created",
+			Data: []byte(`{"type":"response.created","response":{"id":"resp_img_stream3","object":"response","created_at":1700000000,"model":"gpt-5.4","status":"in_progress","output":[]}}`),
+		},
+		{
+			Type: "response.output_item.added",
+			Data: []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"ig_345","type":"image_generation_call","status":"in_progress"}}`),
+		},
+		{
+			Type: "response.image_generation_call.partial_image",
+			Data: []byte(`{"type":"response.image_generation_call.partial_image","output_index":0,"item_id":"ig_345","status":"generating","partial_image_b64":"base64data"}`),
+		},
+		{
+			Type: "response.output_item.done",
+			Data: []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"ig_345","type":"image_generation_call","status":"completed","revised_prompt":"late revised prompt"}}`),
+		},
+	}
+
+	stream, err := trans.TransformStream(context.Background(), streams.SliceStream(events))
+	require.NoError(t, err)
+
+	actual, err := streams.All(stream)
+	require.NoError(t, err)
+	require.Len(t, actual, 4)
+
+	updates := actual[2].Choices[0].TransformerMetadata["image_generation_item_updates"].(map[string]any)
+	require.Equal(t, "late revised prompt", updates["ig_345"].(map[string]any)["revised_prompt"])
+	require.Equal(t, llm.DoneResponse, actual[3])
+}

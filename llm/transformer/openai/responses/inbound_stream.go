@@ -13,15 +13,41 @@ import (
 	"github.com/looplj/axonhub/llm/streams"
 )
 
+func applyImageGenerationMetadataToItem(item *Item, metadata map[string]any) {
+	if item == nil || len(metadata) == 0 {
+		return
+	}
+
+	if action, ok := metadata["action"].(string); ok && action != "" {
+		item.Action = action
+	}
+	if background, ok := metadata["background"].(string); ok && background != "" {
+		item.Background = lo.ToPtr(background)
+	}
+	if outputFormat, ok := metadata["output_format"].(string); ok && outputFormat != "" {
+		item.OutputFormat = lo.ToPtr(outputFormat)
+	}
+	if quality, ok := metadata["quality"].(string); ok && quality != "" {
+		item.Quality = lo.ToPtr(quality)
+	}
+	if size, ok := metadata["size"].(string); ok && size != "" {
+		item.Size = lo.ToPtr(size)
+	}
+	if revisedPrompt, ok := metadata["revised_prompt"].(string); ok && revisedPrompt != "" {
+		item.RevisedPrompt = lo.ToPtr(revisedPrompt)
+	}
+}
+
 // TransformStream transforms the unified llm.Response stream to OpenAI Responses API SSE events.
 func (t *InboundTransformer) TransformStream(
 	ctx context.Context,
 	stream streams.Stream[*llm.Response],
 ) (streams.Stream[*httpclient.StreamEvent], error) {
 	return &responsesInboundStream{
-		source:    stream,
-		ctx:       ctx,
-		toolCalls: make(map[int]*llm.ToolCall),
+		source:                   stream,
+		ctx:                      ctx,
+		toolCalls:                make(map[int]*llm.ToolCall),
+		imageGenerationItemUpdates: make(map[string]map[string]any),
 	}, nil
 }
 
@@ -57,6 +83,8 @@ type responsesInboundStream struct {
 	accumulatedText               strings.Builder
 	accumulatedReasoning          strings.Builder
 	accumulatedReasoningSignature strings.Builder
+	imageGenerationParts          []llm.MessageContentPart
+	imageGenerationItemUpdates    map[string]map[string]any
 
 	// Tool call tracking
 	toolCalls           map[int]*llm.ToolCall
@@ -221,6 +249,18 @@ func (s *responsesInboundStream) Next() bool {
 			}
 		}
 
+		if choice.Delta != nil && len(choice.Delta.Content.MultipleContent) > 0 {
+			for _, part := range choice.Delta.Content.MultipleContent {
+				if part.Type == "image_url" && part.ImageURL != nil && part.ImageURL.URL != "" {
+					s.imageGenerationParts = append(s.imageGenerationParts, part)
+				}
+			}
+		}
+
+		if len(choice.TransformerMetadata) > 0 {
+			s.applyChoiceTransformerMetadata(choice.TransformerMetadata)
+		}
+
 		// Handle finish reason
 		if choice.FinishReason != nil && !s.hasFinished {
 			s.hasFinished = true
@@ -233,6 +273,11 @@ func (s *responsesInboundStream) Next() bool {
 
 			// Close any open output items
 			if err := s.closeCurrentOutputItem(); err != nil {
+				s.err = err
+				return false
+			}
+
+			if err := s.flushImageGenerationParts(); err != nil {
 				s.err = err
 				return false
 			}
@@ -337,6 +382,12 @@ func (s *responsesInboundStream) ensureReasoningItemStarted() error {
 }
 
 func (s *responsesInboundStream) handleTextContent(content *string) error {
+	if len(s.imageGenerationParts) > 0 {
+		if err := s.flushImageGenerationParts(); err != nil {
+			return err
+		}
+	}
+
 	// Close reasoning item if it was started
 	if s.hasReasoningItemStarted {
 		if err := s.closeReasoningItem(); err != nil {
@@ -401,6 +452,155 @@ func (s *responsesInboundStream) handleTextContent(content *string) error {
 	}
 
 	return nil
+}
+
+func (s *responsesInboundStream) flushImageGenerationParts() error {
+	for _, part := range s.imageGenerationParts {
+		if part.Type != "image_url" || part.ImageURL == nil || part.ImageURL.URL == "" {
+			continue
+		}
+
+		if err := s.closeCurrentOutputItem(); err != nil {
+			return err
+		}
+
+		s.currentItemID = generateItemID()
+
+		result := part.ImageURL.URL
+		if idx := strings.Index(result, "base64,"); idx >= 0 {
+			result = result[idx+7:]
+		}
+
+		inProgress := &Item{
+			ID:     s.currentItemID,
+			Type:   "image_generation_call",
+			Status: lo.ToPtr("in_progress"),
+		}
+
+		if err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeOutputItemAdded,
+			OutputIndex: s.outputIndex,
+			Item:        inProgress,
+		}); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation output_item.added event: %w", err)
+		}
+
+		if err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeImageGenerationInProgress,
+			ItemID:      &s.currentItemID,
+			OutputIndex: s.outputIndex,
+			Status:      "in_progress",
+		}); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation in_progress event: %w", err)
+		}
+
+		if err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeImageGenerationGenerating,
+			ItemID:      &s.currentItemID,
+			OutputIndex: s.outputIndex,
+			Status:      "generating",
+		}); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation generating event: %w", err)
+		}
+
+		item := &Item{
+			ID:     s.currentItemID,
+			Type:   "image_generation_call",
+			Status: lo.ToPtr("generating"),
+			Result: lo.ToPtr(result),
+		}
+
+		metadata := make(map[string]any, len(part.TransformerMetadata))
+		for key, value := range part.TransformerMetadata {
+			metadata[key] = value
+		}
+		if pending, ok := s.imageGenerationItemUpdates[result]; ok {
+			for key, value := range pending {
+				metadata[key] = value
+			}
+		}
+
+		applyImageGenerationMetadataToItem(item, metadata)
+
+		partialImageEvent := &StreamEvent{
+			Type:            StreamEventTypeImageGenerationPartialImage,
+			ItemID:          &s.currentItemID,
+			OutputIndex:     s.outputIndex,
+			PartialImageB64: result,
+			Status:          "generating",
+		}
+		if item.Background != nil {
+			partialImageEvent.Background = *item.Background
+		}
+		if item.OutputFormat != nil {
+			partialImageEvent.OutputFormat = *item.OutputFormat
+		}
+		if item.Quality != nil {
+			partialImageEvent.Quality = *item.Quality
+		}
+		if item.Size != nil {
+			partialImageEvent.Size = *item.Size
+		}
+		if item.RevisedPrompt != nil {
+			partialImageEvent.RevisedPrompt = *item.RevisedPrompt
+		}
+
+		if err := s.enqueueEvent(partialImageEvent); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation partial_image event: %w", err)
+		}
+
+		if err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeOutputItemDone,
+			OutputIndex: s.outputIndex,
+			Item:        item,
+		}); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation output_item.done event: %w", err)
+		}
+
+		s.outputIndex++
+	}
+
+	s.imageGenerationParts = nil
+	return nil
+}
+
+func (s *responsesInboundStream) applyChoiceTransformerMetadata(metadata map[string]any) {
+	rawUpdates, ok := metadata["image_generation_item_updates"]
+	if !ok {
+		return
+	}
+
+	updates, ok := rawUpdates.(map[string]any)
+	if !ok {
+		return
+	}
+
+	for _, rawValue := range updates {
+		updateMap, ok := rawValue.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		for _, part := range s.imageGenerationParts {
+			if part.Type != "image_url" || part.ImageURL == nil || part.ImageURL.URL == "" {
+				continue
+			}
+
+			url := part.ImageURL.URL
+			if idx := strings.Index(url, "base64,"); idx >= 0 {
+				url = url[idx+7:]
+			}
+
+			dst := s.imageGenerationItemUpdates[url]
+			if dst == nil {
+				dst = map[string]any{}
+				s.imageGenerationItemUpdates[url] = dst
+			}
+			for key, value := range updateMap {
+				dst[key] = value
+			}
+		}
+	}
 }
 
 func (s *responsesInboundStream) handleToolCalls(toolCalls []llm.ToolCall) error {

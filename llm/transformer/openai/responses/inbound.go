@@ -865,6 +865,7 @@ func convertToResponsesAPIResponse(chatResp *llm.Response) *Response {
 							OutputFormat: xmap.GetStringPtr(part.TransformerMetadata, "output_format"),
 							Quality:      xmap.GetStringPtr(part.TransformerMetadata, "quality"),
 							Size:         xmap.GetStringPtr(part.TransformerMetadata, "size"),
+							RevisedPrompt: xmap.GetStringPtr(part.TransformerMetadata, "revised_prompt"),
 						}
 						resp.Output = append(resp.Output, imageItem)
 					}

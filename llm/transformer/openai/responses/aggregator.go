@@ -37,10 +37,17 @@ type aggregatedItem struct {
 	Type             string
 	Status           string
 	Role             string
+	Action           string
 	CallID           string
 	Name             string
 	Arguments        *strings.Builder
 	EncryptedContent *string
+	Result           *string
+	Background       *string
+	OutputFormat     *string
+	Quality          *string
+	Size             *string
+	RevisedPrompt    *string
 
 	// For custom_tool_call type
 	Input *string
@@ -231,10 +238,20 @@ func (a *streamAggregator) processEvent(ev *StreamEvent) {
 			item.ID = ev.Item.ID
 			item.Type = ev.Item.Type
 			item.Role = ev.Item.Role
+			item.Action = ev.Item.Action
+			if ev.Item.Status != nil {
+				item.Status = *ev.Item.Status
+			}
 			item.CallID = ev.Item.CallID
 			item.Name = ev.Item.Name
 			item.Arguments.WriteString(ev.Item.Arguments)
 			item.EncryptedContent = ev.Item.EncryptedContent
+			item.Result = ev.Item.Result
+			item.Background = ev.Item.Background
+			item.OutputFormat = ev.Item.OutputFormat
+			item.Quality = ev.Item.Quality
+			item.Size = ev.Item.Size
+			item.RevisedPrompt = ev.Item.RevisedPrompt
 			item.Input = ev.Item.Input
 
 			if len(ev.Item.Summary) > 0 {
@@ -441,6 +458,24 @@ func (a *streamAggregator) processEvent(ev *StreamEvent) {
 				if ev.Item.EncryptedContent != nil {
 					item.EncryptedContent = ev.Item.EncryptedContent
 				}
+				if ev.Item.Result != nil {
+					item.Result = ev.Item.Result
+				}
+				if ev.Item.Background != nil {
+					item.Background = ev.Item.Background
+				}
+				if ev.Item.OutputFormat != nil {
+					item.OutputFormat = ev.Item.OutputFormat
+				}
+				if ev.Item.Quality != nil {
+					item.Quality = ev.Item.Quality
+				}
+				if ev.Item.Size != nil {
+					item.Size = ev.Item.Size
+				}
+				if ev.Item.RevisedPrompt != nil {
+					item.RevisedPrompt = ev.Item.RevisedPrompt
+				}
 			}
 		}
 
@@ -561,6 +596,20 @@ func (a *streamAggregator) buildResponse() *Response {
 					Status:           lo.ToPtr(item.Status),
 					Summary:          summary,
 					EncryptedContent: item.EncryptedContent,
+				})
+
+			case "image_generation_call":
+				output = append(output, Item{
+					ID:            item.ID,
+					Type:          item.Type,
+					Status:        lo.ToPtr(item.Status),
+					Action:        item.Action,
+					Result:        item.Result,
+					Background:    item.Background,
+					OutputFormat:  item.OutputFormat,
+					Quality:       item.Quality,
+					Size:          item.Size,
+					RevisedPrompt: item.RevisedPrompt,
 				})
 
 			default:

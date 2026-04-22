@@ -98,6 +98,12 @@ type StreamEvent struct {
 	// For image_generation_call.partial_image events
 	PartialImageB64   string `json:"partial_image_b64,omitempty"`
 	PartialImageIndex *int   `json:"partial_image_index,omitempty"`
+	Status            string `json:"status,omitempty"`
+	Background        string `json:"background,omitempty"`
+	OutputFormat      string `json:"output_format,omitempty"`
+	Quality           string `json:"quality,omitempty"`
+	Size              string `json:"size,omitempty"`
+	RevisedPrompt     string `json:"revised_prompt,omitempty"`
 
 	// For error events
 	Code    string `json:"code,omitempty"`
