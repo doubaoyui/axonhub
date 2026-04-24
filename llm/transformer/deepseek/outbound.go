@@ -92,6 +92,7 @@ func (t *OutboundTransformer) TransformRequest(
 	}
 
 	oaiReq := openai.RequestFromLLM(llmReq)
+	normalizeDeveloperMessages(oaiReq)
 
 	// DeepSeek doesn't support json_schema, convert to json_object
 	if oaiReq.ResponseFormat != nil && oaiReq.ResponseFormat.Type == "json_schema" {
@@ -137,4 +138,43 @@ func (t *OutboundTransformer) TransformRequest(
 		Auth:      auth,
 		APIFormat: string(llm.APIFormatOpenAIChatCompletion),
 	}, nil
+}
+
+func normalizeDeveloperMessages(req *openai.Request) {
+	if req == nil {
+		return
+	}
+
+	filtered := req.Messages[:0]
+	for i := range req.Messages {
+		msg := req.Messages[i]
+		if msg.Role == "developer" {
+			msg.Role = "system"
+		}
+		if shouldDropInvalidAssistantMessage(msg) {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	req.Messages = filtered
+}
+
+func shouldDropInvalidAssistantMessage(msg openai.Message) bool {
+	if msg.Role != "assistant" {
+		return false
+	}
+
+	if len(msg.ToolCalls) > 0 {
+		return false
+	}
+
+	if msg.Content.Content != nil {
+		return false
+	}
+
+	if len(msg.Content.MultipleContent) > 0 {
+		return false
+	}
+
+	return true
 }

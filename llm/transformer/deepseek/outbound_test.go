@@ -186,6 +186,98 @@ func TestOutboundTransformer_TransformRequest_Thinking(t *testing.T) {
 	}
 }
 
+func TestOutboundTransformer_TransformRequest_DeveloperRoleNormalizedToSystem(t *testing.T) {
+	config := &Config{
+		BaseURL:        "https://api.deepseek.com/v1",
+		APIKeyProvider: auth.NewStaticKeyProvider("test-api-key"),
+	}
+
+	transformer, err := NewOutboundTransformerWithConfig(config)
+	require.NoError(t, err)
+
+	request := &llm.Request{
+		Model: "deepseek-chat",
+		Messages: []llm.Message{
+			{
+				Role: "system",
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("base system"),
+				},
+			},
+			{
+				Role: "developer",
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("developer instruction"),
+				},
+			},
+			{
+				Role: "user",
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("Hello"),
+				},
+			},
+		},
+	}
+
+	got, err := transformer.TransformRequest(context.Background(), request)
+	require.NoError(t, err)
+
+	var dsReq Request
+	err = json.Unmarshal(got.Body, &dsReq)
+	require.NoError(t, err)
+	require.Len(t, dsReq.Messages, 3)
+
+	assert.Equal(t, "system", dsReq.Messages[0].Role)
+	assert.Equal(t, "system", dsReq.Messages[1].Role)
+	assert.Equal(t, "user", dsReq.Messages[2].Role)
+}
+
+func TestOutboundTransformer_TransformRequest_DropsReasoningOnlyAssistantMessage(t *testing.T) {
+	config := &Config{
+		BaseURL:        "https://api.deepseek.com/v1",
+		APIKeyProvider: auth.NewStaticKeyProvider("test-api-key"),
+	}
+
+	transformer, err := NewOutboundTransformerWithConfig(config)
+	require.NoError(t, err)
+
+	request := &llm.Request{
+		Model: "deepseek-chat",
+		Messages: []llm.Message{
+			{
+				Role: "user",
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("分析当前数据"),
+				},
+			},
+			{
+				Role:             "assistant",
+				Reasoning:        lo.ToPtr("Now let me do a deeper analysis with Python to get proper statistics."),
+				ReasoningContent: lo.ToPtr("Now let me do a deeper analysis with Python to get proper statistics."),
+			},
+			{
+				Role: "user",
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("不可以使用 mcp ?"),
+				},
+			},
+		},
+	}
+
+	got, err := transformer.TransformRequest(context.Background(), request)
+	require.NoError(t, err)
+
+	var dsReq Request
+	err = json.Unmarshal(got.Body, &dsReq)
+	require.NoError(t, err)
+	require.Len(t, dsReq.Messages, 2)
+
+	assert.Equal(t, "user", dsReq.Messages[0].Role)
+	assert.Equal(t, "分析当前数据", lo.FromPtr(dsReq.Messages[0].Content.Content))
+	assert.Equal(t, "user", dsReq.Messages[1].Role)
+	assert.Equal(t, "不可以使用 mcp ?", lo.FromPtr(dsReq.Messages[1].Content.Content))
+}
+
 func TestOutboundTransformer_TransformRequest_URL(t *testing.T) {
 	tests := []struct {
 		name        string
