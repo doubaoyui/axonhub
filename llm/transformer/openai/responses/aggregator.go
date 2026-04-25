@@ -37,7 +37,7 @@ type aggregatedItem struct {
 	Type             string
 	Status           string
 	Role             string
-	Action           string
+	Action           any
 	CallID           string
 	Name             string
 	Namespace        string
@@ -566,6 +566,14 @@ func (a *streamAggregator) buildResponse() *Response {
 					CallID: item.CallID,
 					Name:   item.Name,
 					Input:  item.Input,
+				})
+
+			case "web_search_call":
+				output = append(output, Item{
+					ID:     item.ID,
+					Type:   item.Type,
+					Status: lo.ToPtr(item.Status),
+					Action: item.Action,
 				})
 
 			case "reasoning":

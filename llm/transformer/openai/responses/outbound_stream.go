@@ -21,7 +21,7 @@ func imageGenerationMetadataFromItem(item *Item) map[string]any {
 	}
 
 	metadata := map[string]any{}
-	if item.Action != "" {
+	if item.Action != nil {
 		metadata["action"] = item.Action
 	}
 	if item.Background != nil && *item.Background != "" {
@@ -210,6 +210,19 @@ func newResponsesOutboundStream(stream streams.Stream[*httpclient.StreamEvent], 
 			scope:                   scope,
 		},
 	}
+}
+
+func hasActionableToolCalls(toolCalls map[string]*llm.ToolCall) bool {
+	for _, tc := range toolCalls {
+		if tc == nil {
+			continue
+		}
+		if tc.WebSearchToolCall == nil {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *responsesOutboundStream) enqueue(resp *llm.Response) {
@@ -432,6 +445,42 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 				},
 			}
 
+		case "web_search_call":
+			toolCallIdx := len(s.state.toolCalls)
+			callID := item.ID
+			s.state.toolCalls[callID] = &llm.ToolCall{
+				ID:    callID,
+				Type:  llm.ToolTypeWebSearch,
+				Index: toolCallIdx,
+				WebSearchToolCall: &llm.WebSearchToolCall{
+					ID:     item.ID,
+					Status: lo.FromPtr(item.Status),
+					Action: item.Action,
+				},
+			}
+			s.state.itemToCallID[item.ID] = callID
+			s.state.toolCallIndex[callID] = toolCallIdx
+
+			resp.Choices = []llm.Choice{
+				{
+					Index: 0,
+					Delta: &llm.Message{
+						ToolCalls: []llm.ToolCall{
+							{
+								ID:    callID,
+								Type:  llm.ToolTypeWebSearch,
+								Index: toolCallIdx,
+								WebSearchToolCall: &llm.WebSearchToolCall{
+									ID:     item.ID,
+									Status: lo.FromPtr(item.Status),
+									Action: item.Action,
+								},
+							},
+						},
+					},
+				},
+			}
+
 		default:
 			if item.Type == "image_generation_call" && item.ID != "" {
 				s.updateImageGenerationItem(item.ID, item)
@@ -584,9 +633,38 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 			streamEvent.Item.ID != "" {
 			s.updateImageGenerationItem(streamEvent.Item.ID, streamEvent.Item)
 		}
+		if streamEvent.Type == StreamEventTypeOutputItemDone &&
+			streamEvent.Item != nil &&
+			streamEvent.Item.Type == "web_search_call" &&
+			streamEvent.Item.ID != "" {
+			if callID, ok := s.state.itemToCallID[streamEvent.Item.ID]; ok {
+				if tc, ok := s.state.toolCalls[callID]; ok && tc.WebSearchToolCall != nil {
+					tc.WebSearchToolCall.Status = lo.FromPtr(streamEvent.Item.Status)
+					tc.WebSearchToolCall.Action = streamEvent.Item.Action
+					resp.Choices = []llm.Choice{
+						{
+							Index: 0,
+							Delta: &llm.Message{
+								ToolCalls: []llm.ToolCall{
+									{
+										ID:                callID,
+										Type:              llm.ToolTypeWebSearch,
+										Index:             s.state.toolCallIndex[callID],
+										WebSearchToolCall: tc.WebSearchToolCall,
+									},
+								},
+							},
+						},
+					}
+					break
+				}
+			}
+		}
 
 		// These events don't need special handling - skip
-		return nil // Intentionally skip this event
+		if len(resp.Choices) == 0 {
+			return nil // Intentionally skip this event
+		}
 
 	case StreamEventTypeResponseCompleted:
 		// Response completed - emit two events: one with finish_reason, one with usage
@@ -596,7 +674,7 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 		}
 
 		finishReason := "stop"
-		if len(s.state.toolCalls) > 0 {
+		if hasActionableToolCalls(s.state.toolCalls) {
 			finishReason = "tool_calls"
 		}
 
@@ -659,6 +737,23 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 				Param:   lo.FromPtr(streamEvent.Param),
 			},
 		}
+
+	case StreamEventTypeWebSearchCallInProgress, StreamEventTypeWebSearchCallSearching, StreamEventTypeWebSearchCallCompleted:
+		if streamEvent.ItemID != nil {
+			if callID, ok := s.state.itemToCallID[*streamEvent.ItemID]; ok {
+				if tc, ok := s.state.toolCalls[callID]; ok && tc.WebSearchToolCall != nil {
+					switch streamEvent.Type {
+					case StreamEventTypeWebSearchCallInProgress:
+						tc.WebSearchToolCall.Status = "in_progress"
+					case StreamEventTypeWebSearchCallSearching:
+						tc.WebSearchToolCall.Status = "searching"
+					case StreamEventTypeWebSearchCallCompleted:
+						tc.WebSearchToolCall.Status = "completed"
+					}
+				}
+			}
+		}
+		return nil
 
 	case StreamEventTypeImageGenerationPartialImage,
 		StreamEventTypeImageGenerationGenerating,

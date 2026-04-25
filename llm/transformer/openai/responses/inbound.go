@@ -547,6 +547,22 @@ func convertItemToMessage(item *Item) (*llm.Message, error) {
 			},
 		}, nil
 
+	case "web_search_call":
+		return &llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   item.ID,
+					Type: llm.ToolTypeWebSearch,
+					WebSearchToolCall: &llm.WebSearchToolCall{
+						ID:     item.ID,
+						Status: lo.FromPtr(item.Status),
+						Action: item.Action,
+					},
+				},
+			},
+		}, nil
+
 	case "function_call_output":
 		if item.Output == nil {
 			return nil, fmt.Errorf("%w: %s", transformer.ErrInvalidRequest, "function_call_output item must have non-nil Output")
@@ -754,6 +770,15 @@ func convertToolsToLLM(tools []Tool) ([]llm.Tool, error) {
 					PartialImages:     tool.PartialImages,
 					Quality:           tool.Quality,
 					Size:              tool.Size,
+				},
+			})
+
+		case "web_search":
+			result = append(result, llm.Tool{
+				Type: llm.ToolTypeWebSearch,
+				WebSearch: &llm.WebSearch{
+					ExternalWebAccess:  tool.ExternalWebAccess,
+					SearchContentTypes: append([]string(nil), tool.SearchContentTypes...),
 				},
 			})
 

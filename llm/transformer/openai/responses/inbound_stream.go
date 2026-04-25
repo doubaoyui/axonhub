@@ -18,7 +18,7 @@ func applyImageGenerationMetadataToItem(item *Item, metadata map[string]any) {
 		return
 	}
 
-	if action, ok := metadata["action"].(string); ok && action != "" {
+	if action := metadata["action"]; action != nil {
 		item.Action = action
 	}
 	if background, ok := metadata["background"].(string); ok && background != "" {
@@ -638,6 +638,8 @@ func (s *responsesInboundStream) handleToolCalls(toolCalls []llm.ToolCall) error
 
 		// Process delta based on tool type
 		switch {
+		case tc.WebSearchToolCall != nil:
+			s.toolCalls[toolCallIndex].WebSearchToolCall = tc.WebSearchToolCall
 		case tc.ResponseCustomToolCall != nil:
 			if err := s.handleCustomToolCallDelta(tc); err != nil {
 				return err
@@ -668,6 +670,7 @@ func (s *responsesInboundStream) initToolCall(tc llm.ToolCall) error {
 		ID:                     tc.ID,
 		Type:                   tc.Type,
 		ResponseCustomToolCall: tc.ResponseCustomToolCall,
+		WebSearchToolCall:      tc.WebSearchToolCall,
 		Function: llm.FunctionCall{
 			Name:      tc.Function.Name,
 			Arguments: "",
@@ -680,6 +683,40 @@ func (s *responsesInboundStream) initToolCall(tc llm.ToolCall) error {
 	}
 
 	switch {
+	case tc.WebSearchToolCall != nil:
+		item := &Item{
+			ID:     itemID,
+			Type:   "web_search_call",
+			Status: lo.ToPtr("in_progress"),
+		}
+
+		err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeOutputItemAdded,
+			OutputIndex: s.outputIndex,
+			Item:        item,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to enqueue output_item.added event: %w", err)
+		}
+
+		err = s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeWebSearchCallInProgress,
+			ItemID:      &itemID,
+			OutputIndex: s.outputIndex,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to enqueue web_search_call.in_progress event: %w", err)
+		}
+
+		err = s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeWebSearchCallSearching,
+			ItemID:      &itemID,
+			OutputIndex: s.outputIndex,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to enqueue web_search_call.searching event: %w", err)
+		}
+
 	case tc.ResponseCustomToolCall != nil:
 		item := &Item{
 			ID:     itemID,
@@ -966,6 +1003,32 @@ func (s *responsesInboundStream) closeCurrentOutputItem() error {
 		}
 
 		switch {
+		case tc.WebSearchToolCall != nil:
+			item := Item{
+				ID:     itemID,
+				Type:   "web_search_call",
+				Status: lo.ToPtr("completed"),
+				Action: tc.WebSearchToolCall.Action,
+			}
+
+			err := s.enqueueEvent(&StreamEvent{
+				Type:        StreamEventTypeWebSearchCallCompleted,
+				ItemID:      &itemID,
+				OutputIndex: s.toolCallOutputIndex[idx],
+			})
+			if err != nil {
+				return fmt.Errorf("failed to enqueue web_search_call.completed event: %w", err)
+			}
+
+			err = s.enqueueEvent(&StreamEvent{
+				Type:        StreamEventTypeOutputItemDone,
+				OutputIndex: s.toolCallOutputIndex[idx],
+				Item:        &item,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to enqueue output_item.done event: %w", err)
+			}
+
 		case tc.ResponseCustomToolCall != nil:
 			// Custom tool call - emit custom_tool_call_input.done then output_item.done
 			fullInput := tc.ResponseCustomToolCall.Input

@@ -42,6 +42,12 @@ const (
 	StreamEventTypeCustomToolCallInputDelta StreamEventType = "response.custom_tool_call_input.delta"
 	StreamEventTypeCustomToolCallInputDone  StreamEventType = "response.custom_tool_call_input.done"
 
+	// Web search call events.
+
+	StreamEventTypeWebSearchCallInProgress StreamEventType = "response.web_search_call.in_progress"
+	StreamEventTypeWebSearchCallSearching  StreamEventType = "response.web_search_call.searching"
+	StreamEventTypeWebSearchCallCompleted  StreamEventType = "response.web_search_call.completed"
+
 	// Reasoning events.
 
 	StreamEventTypeReasoningSummaryPartAdded StreamEventType = "response.reasoning_summary_part.added"
@@ -106,8 +112,8 @@ type StreamEvent struct {
 	RevisedPrompt     string `json:"revised_prompt,omitempty"`
 
 	// For error events
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
+	Code    string  `json:"code,omitempty"`
+	Message string  `json:"message,omitempty"`
 	Param   *string `json:"param,omitempty"`
 }
 

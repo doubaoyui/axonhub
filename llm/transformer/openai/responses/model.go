@@ -22,7 +22,7 @@ type ImageGeneration struct {
 }
 
 type Tool struct {
-	// Any of "function", "namespace", "image_generation", "custom".
+	// Any of "function", "namespace", "image_generation", "web_search", "custom".
 	Type        string `json:"type,omitempty"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
@@ -53,6 +53,11 @@ type Tool struct {
 	Quality string `json:"quality,omitempty"`
 	// This field is for ImageGeneration
 	Size string `json:"size,omitempty"`
+
+	// This field is for WebSearch.
+	ExternalWebAccess *bool `json:"external_web_access,omitempty"`
+	// This field is for WebSearch.
+	SearchContentTypes []string `json:"search_content_types,omitempty"`
 
 	// This field is from Responses namespace tools.
 	Tools []Tool `json:"tools,omitempty"`
@@ -390,8 +395,8 @@ type Item struct {
 
 	// Image generation fields
 
-	// Action for image generation items, e.g: generate
-	Action string `json:"action,omitempty"`
+	// Action for image generation and web search items.
+	Action any `json:"action,omitempty"`
 	// Background for image generated, e.g: opaque
 	Background *string `json:"background,omitempty"`
 	// Output format for image generated, e.g: png

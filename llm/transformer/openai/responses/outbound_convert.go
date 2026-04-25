@@ -220,7 +220,18 @@ func convertAssistantMessage(msg llm.Message, scope shared.TransportScope) []Ite
 
 	// Handle tool calls
 	for _, tc := range msg.ToolCalls {
-		if tc.ResponseCustomToolCall != nil {
+		if tc.WebSearchToolCall != nil {
+			status := tc.WebSearchToolCall.Status
+			if status == "" {
+				status = "completed"
+			}
+			toolCallItems = append(toolCallItems, Item{
+				ID:     tc.WebSearchToolCall.ID,
+				Type:   "web_search_call",
+				Status: lo.ToPtr(status),
+				Action: tc.WebSearchToolCall.Action,
+			})
+		} else if tc.ResponseCustomToolCall != nil {
 			toolCallItems = append(toolCallItems, Item{
 				Type:   "custom_tool_call",
 				CallID: tc.ResponseCustomToolCall.CallID,
@@ -329,6 +340,18 @@ func convertImageGenerationToTool(src llm.Tool) Tool {
 		tool.PartialImages = src.ImageGeneration.PartialImages
 		tool.Quality = src.ImageGeneration.Quality
 		tool.Size = src.ImageGeneration.Size
+	}
+
+	return tool
+}
+
+func convertWebSearchToTool(src llm.Tool) Tool {
+	tool := Tool{
+		Type: "web_search",
+	}
+	if src.WebSearch != nil {
+		tool.ExternalWebAccess = src.WebSearch.ExternalWebAccess
+		tool.SearchContentTypes = append([]string(nil), src.WebSearch.SearchContentTypes...)
 	}
 
 	return tool
@@ -583,6 +606,16 @@ func convertOutputToMessage(output []Item, scope shared.TransportScope, transfor
 					CallID: outputItem.CallID,
 					Name:   outputItem.Name,
 					Input:  inputStr,
+				},
+			})
+		case "web_search_call":
+			toolCalls = append(toolCalls, llm.ToolCall{
+				ID:   outputItem.ID,
+				Type: llm.ToolTypeWebSearch,
+				WebSearchToolCall: &llm.WebSearchToolCall{
+					ID:     outputItem.ID,
+					Status: lo.FromPtr(outputItem.Status),
+					Action: outputItem.Action,
 				},
 			})
 		case "reasoning":
