@@ -22,7 +22,7 @@ type ImageGeneration struct {
 }
 
 type Tool struct {
-	// Any of "function", "image_generation", "custom".
+	// Any of "function", "namespace", "image_generation", "custom".
 	Type        string `json:"type,omitempty"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
@@ -53,6 +53,9 @@ type Tool struct {
 	Quality string `json:"quality,omitempty"`
 	// This field is for ImageGeneration
 	Size string `json:"size,omitempty"`
+
+	// This field is from Responses namespace tools.
+	Tools []Tool `json:"tools,omitempty"`
 }
 
 // CustomToolFormat represents the format definition for a custom tool.
@@ -406,6 +409,7 @@ type Item struct {
 	// Function call fields
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
 
 	// Custom tool call fields (for type="custom_tool_call")

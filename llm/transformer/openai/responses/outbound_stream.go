@@ -189,7 +189,7 @@ type outboundStreamState struct {
 	toolCallIndex map[string]int           // callID -> index in the output
 
 	// Image generation tracking
-	imageGenerationItems   map[string]*Item          // item.id -> latest image_generation_call item
+	imageGenerationItems    map[string]*Item // item.id -> latest image_generation_call item
 	pendingImageItemUpdates map[string]map[string]any
 
 	// Reasoning signature tracking
@@ -262,8 +262,8 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 				Created: s.state.created,
 				Choices: []llm.Choice{
 					{
-						Index: 0,
-						Delta: &llm.Message{},
+						Index:               0,
+						Delta:               &llm.Message{},
 						TransformerMetadata: updates,
 					},
 				},
@@ -367,11 +367,12 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 		case "function_call":
 			// Initialize tool call tracking
 			toolCallIdx := len(s.state.toolCalls)
+			name := encodeResponsesFunctionCallName(item.Namespace, item.Name)
 			s.state.toolCalls[item.CallID] = &llm.ToolCall{
 				ID:   item.CallID,
 				Type: "function",
 				Function: llm.FunctionCall{
-					Name:      item.Name,
+					Name:      name,
 					Arguments: "",
 				},
 			}
@@ -389,7 +390,7 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 								Type:  "function",
 								Index: toolCallIdx,
 								Function: llm.FunctionCall{
-									Name: item.Name,
+									Name: name,
 								},
 							},
 						},
@@ -476,7 +477,11 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 		// Function call completed - update state but don't emit an event
 		if streamEvent.CallID != "" {
 			if tc, ok := s.state.toolCalls[streamEvent.CallID]; ok {
-				tc.Function.Name = streamEvent.Name
+				if streamEvent.Name != "" {
+					if _, _, ok := decodeResponsesMCPToolName(tc.Function.Name); !ok {
+						tc.Function.Name = streamEvent.Name
+					}
+				}
 				tc.Function.Arguments = streamEvent.Arguments
 			}
 		}

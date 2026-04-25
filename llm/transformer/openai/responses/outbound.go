@@ -158,6 +158,7 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 			continue
 		}
 	}
+	tools = coalesceResponsesNamespaceTools(tools)
 
 	payload := Request{
 		Model:                llmReq.Model,

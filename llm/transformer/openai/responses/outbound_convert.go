@@ -228,10 +228,12 @@ func convertAssistantMessage(msg llm.Message, scope shared.TransportScope) []Ite
 				Input:  lo.ToPtr(tc.ResponseCustomToolCall.Input),
 			})
 		} else {
+			namespace, toolName := decodeResponsesFunctionCallName(tc.Function.Name)
 			toolCallItems = append(toolCallItems, Item{
 				Type:      "function_call",
 				CallID:    tc.ID,
-				Name:      tc.Function.Name,
+				Name:      toolName,
+				Namespace: namespace,
 				Arguments: tc.Function.Arguments,
 			})
 		}
@@ -354,6 +356,31 @@ func convertCustomToTool(src llm.Tool) Tool {
 
 // convertFunctionToTool converts an llm.Tool function to Responses API Tool format.
 func convertFunctionToTool(src llm.Tool) Tool {
+	if namespace, toolName, ok := decodeResponsesMCPToolName(src.Function.Name); ok {
+		tool := Tool{
+			Type:        "function",
+			Name:        toolName,
+			Description: src.Function.Description,
+			Strict:      src.Function.Strict,
+		}
+		if len(src.Function.Parameters) > 0 {
+			var params map[string]any
+			if err := json.Unmarshal(src.Function.Parameters, &params); err == nil {
+				if params == nil {
+					params = map[string]any{}
+				}
+				tool.Parameters = params
+			}
+		}
+
+		return Tool{
+			Type:        "namespace",
+			Name:        namespace,
+			Description: "Tools in the " + namespace + " namespace.",
+			Tools:       []Tool{tool},
+		}
+	}
+
 	tool := Tool{
 		Type:        "function",
 		Name:        src.Function.Name,
@@ -431,7 +458,11 @@ func convertToolChoice(src *llm.ToolChoice) *ToolChoice {
 	} else if src.NamedToolChoice != nil {
 		// Specific tool choice
 		result.Type = &src.NamedToolChoice.Type
-		result.Name = &src.NamedToolChoice.Function.Name
+		name := src.NamedToolChoice.Function.Name
+		if _, toolName, ok := decodeResponsesMCPToolName(name); ok {
+			name = toolName
+		}
+		result.Name = &name
 	}
 
 	return result
@@ -531,11 +562,12 @@ func convertOutputToMessage(output []Item, scope shared.TransportScope, transfor
 				appendText(*outputItem.Text)
 			}
 		case "function_call":
+			name := encodeResponsesFunctionCallName(outputItem.Namespace, outputItem.Name)
 			toolCalls = append(toolCalls, llm.ToolCall{
 				ID:   outputItem.CallID,
 				Type: "function",
 				Function: llm.FunctionCall{
-					Name:      outputItem.Name,
+					Name:      name,
 					Arguments: outputItem.Arguments,
 				},
 			})

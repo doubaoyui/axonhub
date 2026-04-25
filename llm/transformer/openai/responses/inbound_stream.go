@@ -44,9 +44,9 @@ func (t *InboundTransformer) TransformStream(
 	stream streams.Stream[*llm.Response],
 ) (streams.Stream[*httpclient.StreamEvent], error) {
 	return &responsesInboundStream{
-		source:                   stream,
-		ctx:                      ctx,
-		toolCalls:                make(map[int]*llm.ToolCall),
+		source:                     stream,
+		ctx:                        ctx,
+		toolCalls:                  make(map[int]*llm.ToolCall),
 		imageGenerationItemUpdates: make(map[string]map[string]any),
 	}, nil
 }
@@ -700,12 +700,14 @@ func (s *responsesInboundStream) initToolCall(tc llm.ToolCall) error {
 		}
 
 	default:
+		namespace, toolName := decodeResponsesFunctionCallName(tc.Function.Name)
 		item := &Item{
-			ID:     itemID,
-			Type:   "function_call",
-			Status: lo.ToPtr("in_progress"),
-			CallID: tc.ID,
-			Name:   tc.Function.Name,
+			ID:        itemID,
+			Type:      "function_call",
+			Status:    lo.ToPtr("in_progress"),
+			CallID:    tc.ID,
+			Name:      toolName,
+			Namespace: namespace,
 		}
 
 		err := s.enqueueEvent(&StreamEvent{
@@ -998,6 +1000,7 @@ func (s *responsesInboundStream) closeCurrentOutputItem() error {
 
 		default:
 			// Function call - emit function_call_arguments.done then output_item.done
+			namespace, toolName := decodeResponsesFunctionCallName(tc.Function.Name)
 			err := s.enqueueEvent(&StreamEvent{
 				Type:        StreamEventTypeFunctionCallArgumentsDone,
 				ItemID:      &itemID,
@@ -1013,7 +1016,8 @@ func (s *responsesInboundStream) closeCurrentOutputItem() error {
 				Type:      "function_call",
 				Status:    lo.ToPtr("completed"),
 				CallID:    tc.ID,
-				Name:      tc.Function.Name,
+				Name:      toolName,
+				Namespace: namespace,
 				Arguments: tc.Function.Arguments,
 			}
 

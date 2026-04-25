@@ -304,10 +304,14 @@ func convertToolChoiceToLLM(src *ToolChoice) *llm.ToolChoice {
 	if src.Mode != nil {
 		result.ToolChoice = src.Mode
 	} else if src.Type != nil && src.Name != nil {
+		name := *src.Name
+		if src.Type != nil && *src.Type == "function" {
+			name = encodeResponsesFunctionCallName("", name)
+		}
 		result.NamedToolChoice = &llm.NamedToolChoice{
 			Type: *src.Type,
 			Function: llm.ToolFunction{
-				Name: *src.Name,
+				Name: name,
 			},
 		}
 	}
@@ -411,7 +415,7 @@ func convertReasoningWithFollowing(items []Item, startIdx int) (*llm.Message, in
 				ID:   nextItem.CallID,
 				Type: "function",
 				Function: llm.FunctionCall{
-					Name:      nextItem.Name,
+					Name:      encodeResponsesFunctionCallName(nextItem.Namespace, nextItem.Name),
 					Arguments: nextItem.Arguments,
 				},
 			})
@@ -514,7 +518,7 @@ func convertItemToMessage(item *Item) (*llm.Message, error) {
 					ID:   item.CallID,
 					Type: "function",
 					Function: llm.FunctionCall{
-						Name:      item.Name,
+						Name:      encodeResponsesFunctionCallName(item.Namespace, item.Name),
 						Arguments: item.Arguments,
 					},
 				},
@@ -716,6 +720,28 @@ func convertToolsToLLM(tools []Tool) ([]llm.Tool, error) {
 				},
 			})
 
+		case "namespace":
+			for _, namespaceTool := range tool.Tools {
+				if namespaceTool.Type != "function" {
+					continue
+				}
+
+				params, err := json.Marshal(namespaceTool.Parameters)
+				if err != nil {
+					return nil, fmt.Errorf("failed to marshal namespace function parameters: %w", err)
+				}
+
+				result = append(result, llm.Tool{
+					Type: "function",
+					Function: llm.Function{
+						Name:        encodeResponsesMCPToolName(tool.Name, namespaceTool.Name),
+						Description: namespaceTool.Description,
+						Parameters:  params,
+						Strict:      namespaceTool.Strict,
+					},
+				})
+			}
+
 		case "image_generation":
 			result = append(result, llm.Tool{
 				Type: llm.ToolTypeImageGeneration,
@@ -808,11 +834,13 @@ func convertToResponsesAPIResponse(chatResp *llm.Response) *Response {
 						Status: lo.ToPtr("completed"),
 					})
 				} else {
+					namespace, toolName := decodeResponsesFunctionCallName(toolCall.Function.Name)
 					resp.Output = append(resp.Output, Item{
 						ID:        toolCall.ID,
 						Type:      "function_call",
 						CallID:    toolCall.ID,
-						Name:      toolCall.Function.Name,
+						Name:      toolName,
+						Namespace: namespace,
 						Arguments: toolCall.Function.Arguments,
 						Status:    lo.ToPtr("completed"),
 					})
@@ -856,15 +884,15 @@ func convertToResponsesAPIResponse(chatResp *llm.Response) *Response {
 					// Handle image output
 					if part.ImageURL != nil {
 						imageItem := Item{
-							ID:           generateItemID(),
-							Type:         "image_generation_call",
-							Role:         "assistant",
-							Result:       lo.ToPtr(xurl.ExtractBase64FromDataURL(part.ImageURL.URL)),
-							Status:       lo.ToPtr("completed"),
-							Background:   xmap.GetStringPtr(part.TransformerMetadata, "background"),
-							OutputFormat: xmap.GetStringPtr(part.TransformerMetadata, "output_format"),
-							Quality:      xmap.GetStringPtr(part.TransformerMetadata, "quality"),
-							Size:         xmap.GetStringPtr(part.TransformerMetadata, "size"),
+							ID:            generateItemID(),
+							Type:          "image_generation_call",
+							Role:          "assistant",
+							Result:        lo.ToPtr(xurl.ExtractBase64FromDataURL(part.ImageURL.URL)),
+							Status:        lo.ToPtr("completed"),
+							Background:    xmap.GetStringPtr(part.TransformerMetadata, "background"),
+							OutputFormat:  xmap.GetStringPtr(part.TransformerMetadata, "output_format"),
+							Quality:       xmap.GetStringPtr(part.TransformerMetadata, "quality"),
+							Size:          xmap.GetStringPtr(part.TransformerMetadata, "size"),
 							RevisedPrompt: xmap.GetStringPtr(part.TransformerMetadata, "revised_prompt"),
 						}
 						resp.Output = append(resp.Output, imageItem)
