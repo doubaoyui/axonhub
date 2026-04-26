@@ -46,6 +46,89 @@ func imageGenerationMetadataFromItem(item *Item) map[string]any {
 	return metadata
 }
 
+func imageGenerationToolCallFromItem(item *Item, eventType StreamEventType) *llm.ImageGenerationToolCall {
+	if item == nil {
+		return nil
+	}
+
+	return &llm.ImageGenerationToolCall{
+		ID:            item.ID,
+		EventType:     string(eventType),
+		Status:        lo.FromPtr(item.Status),
+		Action:        item.Action,
+		Result:        lo.FromPtr(item.Result),
+		Background:    lo.FromPtr(item.Background),
+		OutputFormat:  lo.FromPtr(item.OutputFormat),
+		Quality:       lo.FromPtr(item.Quality),
+		Size:          lo.FromPtr(item.Size),
+		RevisedPrompt: lo.FromPtr(item.RevisedPrompt),
+	}
+}
+
+func imageGenerationStatusForEvent(eventType StreamEventType, status string) string {
+	if status != "" {
+		return status
+	}
+
+	switch eventType {
+	case StreamEventTypeOutputItemAdded, StreamEventTypeImageGenerationInProgress:
+		return "in_progress"
+	case StreamEventTypeImageGenerationGenerating, StreamEventTypeImageGenerationPartialImage:
+		return "generating"
+	case StreamEventTypeImageGenerationCompleted:
+		return "completed"
+	default:
+		return ""
+	}
+}
+
+func applyImageGenerationMetadataToToolCall(toolCall *llm.ImageGenerationToolCall, metadata map[string]any) {
+	if toolCall == nil || len(metadata) == 0 {
+		return
+	}
+
+	if action := metadata["action"]; action != nil {
+		toolCall.Action = action
+	}
+	if background, ok := metadata["background"].(string); ok {
+		toolCall.Background = background
+	}
+	if outputFormat, ok := metadata["output_format"].(string); ok {
+		toolCall.OutputFormat = outputFormat
+	}
+	if quality, ok := metadata["quality"].(string); ok {
+		toolCall.Quality = quality
+	}
+	if size, ok := metadata["size"].(string); ok {
+		toolCall.Size = size
+	}
+	if revisedPrompt, ok := metadata["revised_prompt"].(string); ok {
+		toolCall.RevisedPrompt = revisedPrompt
+	}
+}
+
+func imageGenerationToolCallFromStreamEvent(event *StreamEvent, metadata map[string]any) *llm.ImageGenerationToolCall {
+	if event == nil {
+		return nil
+	}
+
+	toolCall := &llm.ImageGenerationToolCall{
+		ID:                lo.FromPtr(event.ItemID),
+		EventType:         string(event.Type),
+		Status:            imageGenerationStatusForEvent(event.Type, event.Status),
+		PartialImageB64:   event.PartialImageB64,
+		PartialImageIndex: event.PartialImageIndex,
+		Background:        event.Background,
+		OutputFormat:      event.OutputFormat,
+		Quality:           event.Quality,
+		Size:              event.Size,
+		RevisedPrompt:     event.RevisedPrompt,
+	}
+	applyImageGenerationMetadataToToolCall(toolCall, metadata)
+
+	return toolCall
+}
+
 func imageGenerationMetadataFromStreamEvent(event *StreamEvent) map[string]any {
 	if event == nil {
 		return nil
@@ -97,10 +180,6 @@ func (s *responsesOutboundStream) updateImageGenerationItem(itemID string, item 
 
 	itemCopy := *item
 	s.state.imageGenerationItems[itemID] = &itemCopy
-
-	if metadata := imageGenerationMetadataFromItem(&itemCopy); len(metadata) > 0 {
-		s.state.pendingImageItemUpdates[itemID] = metadata
-	}
 }
 
 func (s *responsesOutboundStream) metadataForImageGenerationEvent(event *StreamEvent) map[string]any {
@@ -119,31 +198,7 @@ func (s *responsesOutboundStream) metadataForImageGenerationEvent(event *StreamE
 	}
 
 	metadata = mergeImageGenerationMetadata(imageGenerationMetadataFromItem(item), metadata)
-	if len(metadata) > 0 {
-		delete(s.state.pendingImageItemUpdates, *event.ItemID)
-	}
-
 	return metadata
-}
-
-func (s *responsesOutboundStream) pendingImageUpdatesMetadata() map[string]any {
-	if len(s.state.pendingImageItemUpdates) == 0 {
-		return nil
-	}
-
-	updates := make(map[string]any, len(s.state.pendingImageItemUpdates))
-	for itemID, metadata := range s.state.pendingImageItemUpdates {
-		update := make(map[string]any, len(metadata))
-		for key, value := range metadata {
-			update[key] = value
-		}
-		updates[itemID] = update
-	}
-	clear(s.state.pendingImageItemUpdates)
-
-	return map[string]any{
-		"image_generation_item_updates": updates,
-	}
 }
 
 // TransformStream transforms OpenAI Responses API SSE events to unified llm.Response stream.
@@ -189,8 +244,7 @@ type outboundStreamState struct {
 	toolCallIndex map[string]int           // callID -> index in the output
 
 	// Image generation tracking
-	imageGenerationItems    map[string]*Item // item.id -> latest image_generation_call item
-	pendingImageItemUpdates map[string]map[string]any
+	imageGenerationItems map[string]*Item // item.id -> latest image_generation_call item
 
 	// Reasoning signature tracking
 	encryptedContentEmitted map[string]bool
@@ -205,7 +259,6 @@ func newResponsesOutboundStream(stream streams.Stream[*httpclient.StreamEvent], 
 			itemToCallID:            make(map[string]string),
 			toolCallIndex:           make(map[string]int),
 			imageGenerationItems:    make(map[string]*Item),
-			pendingImageItemUpdates: make(map[string]map[string]any),
 			encryptedContentEmitted: make(map[string]bool),
 			scope:                   scope,
 		},
@@ -217,12 +270,39 @@ func hasActionableToolCalls(toolCalls map[string]*llm.ToolCall) bool {
 		if tc == nil {
 			continue
 		}
-		if tc.WebSearchToolCall == nil {
+		if tc.WebSearchToolCall == nil && tc.ImageGenerationToolCall == nil {
 			return true
 		}
 	}
 
 	return false
+}
+
+func (s *responsesOutboundStream) ensureImageGenerationToolCall(itemID string) (*llm.ToolCall, int) {
+	if itemID == "" {
+		return nil, 0
+	}
+
+	if callID, ok := s.state.itemToCallID[itemID]; ok {
+		if tc, ok := s.state.toolCalls[callID]; ok {
+			return tc, s.state.toolCallIndex[callID]
+		}
+	}
+
+	toolCallIdx := len(s.state.toolCalls)
+	tc := &llm.ToolCall{
+		ID:    itemID,
+		Type:  llm.ToolTypeImageGeneration,
+		Index: toolCallIdx,
+		ImageGenerationToolCall: &llm.ImageGenerationToolCall{
+			ID: itemID,
+		},
+	}
+	s.state.toolCalls[itemID] = tc
+	s.state.itemToCallID[itemID] = itemID
+	s.state.toolCallIndex[itemID] = toolCallIdx
+
+	return tc, toolCallIdx
 }
 
 func (s *responsesOutboundStream) enqueue(resp *llm.Response) {
@@ -267,21 +347,6 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 
 	// Handle [DONE] marker
 	if string(event.Data) == "[DONE]" {
-		if updates := s.pendingImageUpdatesMetadata(); updates != nil {
-			s.enqueue(&llm.Response{
-				Object:  "chat.completion.chunk",
-				ID:      s.state.responseID,
-				Model:   s.state.responseModel,
-				Created: s.state.created,
-				Choices: []llm.Choice{
-					{
-						Index:               0,
-						Delta:               &llm.Message{},
-						TransformerMetadata: updates,
-					},
-				},
-			})
-		}
 		s.enqueue(llm.DoneResponse)
 		return nil
 	}
@@ -481,11 +546,30 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 				},
 			}
 
-		default:
-			if item.Type == "image_generation_call" && item.ID != "" {
-				s.updateImageGenerationItem(item.ID, item)
+		case "image_generation_call":
+			s.updateImageGenerationItem(item.ID, item)
+			tc, toolCallIdx := s.ensureImageGenerationToolCall(item.ID)
+			if tc == nil {
+				return nil
+			}
+			tc.ImageGenerationToolCall = imageGenerationToolCallFromItem(item, StreamEventTypeOutputItemAdded)
+			resp.Choices = []llm.Choice{
+				{
+					Index: 0,
+					Delta: &llm.Message{
+						ToolCalls: []llm.ToolCall{
+							{
+								ID:                      item.ID,
+								Type:                    llm.ToolTypeImageGeneration,
+								Index:                   toolCallIdx,
+								ImageGenerationToolCall: tc.ImageGenerationToolCall,
+							},
+						},
+					},
+				},
 			}
 
+		default:
 			// For other item types (e.g., message), skip - no meaningful content to emit
 			return nil // Intentionally skip this event
 		}
@@ -632,6 +716,25 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 			streamEvent.Item.Type == "image_generation_call" &&
 			streamEvent.Item.ID != "" {
 			s.updateImageGenerationItem(streamEvent.Item.ID, streamEvent.Item)
+			tc, toolCallIdx := s.ensureImageGenerationToolCall(streamEvent.Item.ID)
+			if tc != nil {
+				tc.ImageGenerationToolCall = imageGenerationToolCallFromItem(streamEvent.Item, StreamEventTypeOutputItemDone)
+				resp.Choices = []llm.Choice{
+					{
+						Index: 0,
+						Delta: &llm.Message{
+							ToolCalls: []llm.ToolCall{
+								{
+									ID:                      streamEvent.Item.ID,
+									Type:                    llm.ToolTypeImageGeneration,
+									Index:                   toolCallIdx,
+									ImageGenerationToolCall: tc.ImageGenerationToolCall,
+								},
+							},
+						},
+					},
+				}
+			}
 		}
 		if streamEvent.Type == StreamEventTypeOutputItemDone &&
 			streamEvent.Item != nil &&
@@ -671,6 +774,40 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 		if streamEvent.Response != nil {
 			s.state.previousResponseID = streamEvent.Response.PreviousResponseID
 			resp.PreviousResponseID = s.state.previousResponseID
+
+			for i := range streamEvent.Response.Output {
+				item := &streamEvent.Response.Output[i]
+				if item.Type == "image_generation_call" && item.ID != "" {
+					s.updateImageGenerationItem(item.ID, item)
+					tc, toolCallIdx := s.ensureImageGenerationToolCall(item.ID)
+					if tc != nil {
+						tc.ImageGenerationToolCall = imageGenerationToolCallFromItem(item, StreamEventTypeResponseCompleted)
+						tc.ImageGenerationToolCall.EventType = "response.completed"
+						s.enqueue(&llm.Response{
+							Object:             "chat.completion.chunk",
+							ID:                 s.state.responseID,
+							Model:              s.state.responseModel,
+							Created:            s.state.created,
+							PreviousResponseID: s.state.previousResponseID,
+							Choices: []llm.Choice{
+								{
+									Index: 0,
+									Delta: &llm.Message{
+										ToolCalls: []llm.ToolCall{
+											{
+												ID:                      item.ID,
+												Type:                    llm.ToolTypeImageGeneration,
+												Index:                   toolCallIdx,
+												ImageGenerationToolCall: tc.ImageGenerationToolCall,
+											},
+										},
+									},
+								},
+							},
+						})
+					}
+				}
+			}
 		}
 
 		finishReason := "stop"
@@ -686,10 +823,6 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 				FinishReason: &finishReason,
 			},
 		}
-		if updates := s.pendingImageUpdatesMetadata(); updates != nil {
-			resp.Choices[0].TransformerMetadata = updates
-		}
-
 		// Second event: usage (if available)
 		if streamEvent.Response != nil && streamEvent.Response.Usage != nil {
 			s.state.usage = streamEvent.Response.Usage.ToUsage()
@@ -760,35 +893,35 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 		StreamEventTypeImageGenerationInProgress,
 		StreamEventTypeImageGenerationCompleted:
 		// Handle image generation events
-		if streamEvent.PartialImageB64 != "" {
-			imageURL := "data:image/png;base64," + streamEvent.PartialImageB64
-			metadata := s.metadataForImageGenerationEvent(&streamEvent)
+		if streamEvent.ItemID == nil || *streamEvent.ItemID == "" {
+			return nil
+		}
 
-			resp.Choices = []llm.Choice{
-				{
-					Index: 0,
-					Delta: &llm.Message{
-						Content: llm.MessageContent{
-							MultipleContent: []llm.MessageContentPart{
-								{
-									Type: "image_url",
-									ImageURL: &llm.ImageURL{
-										URL: imageURL,
-									},
-									TransformerMetadata: metadata,
-								},
-							},
+		tc, toolCallIdx := s.ensureImageGenerationToolCall(*streamEvent.ItemID)
+		if tc == nil {
+			return nil
+		}
+		metadata := s.metadataForImageGenerationEvent(&streamEvent)
+		update := imageGenerationToolCallFromStreamEvent(&streamEvent, metadata)
+		if update.ID == "" {
+			update.ID = *streamEvent.ItemID
+		}
+		tc.ImageGenerationToolCall = update
+
+		resp.Choices = []llm.Choice{
+			{
+				Index: 0,
+				Delta: &llm.Message{
+					ToolCalls: []llm.ToolCall{
+						{
+							ID:                      update.ID,
+							Type:                    llm.ToolTypeImageGeneration,
+							Index:                   toolCallIdx,
+							ImageGenerationToolCall: update,
 						},
 					},
 				},
-			}
-		} else {
-			resp.Choices = []llm.Choice{
-				{
-					Index: 0,
-					Delta: &llm.Message{},
-				},
-			}
+			},
 		}
 
 	default:

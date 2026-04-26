@@ -75,6 +75,10 @@ type ToolCall struct {
 	// Will be used when Type is "web_search".
 	WebSearchToolCall *WebSearchToolCall `json:"web_search_tool_call,omitempty"`
 
+	// ImageGenerationToolCall holds the image generation call data for OpenAI Responses API.
+	// Will be used when Type is "image_generation".
+	ImageGenerationToolCall *ImageGenerationToolCall `json:"image_generation_tool_call,omitempty"`
+
 	// Index is the index of the tool call in the list of tool calls.
 	// Cannot use omitempty, as an index of 0 would be omitted, which can break consumers.
 	Index int `json:"index"`
@@ -287,4 +291,27 @@ type WebSearchToolCall struct {
 	Status string `json:"status,omitempty"`
 	// Action carries the provider action object returned on completed output items.
 	Action any `json:"action,omitempty"`
+}
+
+// ImageGenerationToolCall represents an image generation call from the OpenAI Responses API.
+type ImageGenerationToolCall struct {
+	// ID is the Responses output item identifier.
+	ID string `json:"id,omitempty"`
+	// EventType is the original Responses stream event type when this value represents an event delta.
+	EventType string `json:"event_type,omitempty"`
+	// Status is the current image generation state, e.g. "in_progress", "generating", or "completed".
+	Status string `json:"status,omitempty"`
+	// Action carries the provider action object when present.
+	Action any `json:"action,omitempty"`
+	// Result is the final base64 image returned on image_generation_call output items.
+	Result string `json:"result,omitempty"`
+	// PartialImageB64 is the base64 image payload from partial_image stream events.
+	PartialImageB64 string `json:"partial_image_b64,omitempty"`
+	// PartialImageIndex is the partial image index from partial_image stream events.
+	PartialImageIndex *int   `json:"partial_image_index,omitempty"`
+	Background        string `json:"background,omitempty"`
+	OutputFormat      string `json:"output_format,omitempty"`
+	Quality           string `json:"quality,omitempty"`
+	Size              string `json:"size,omitempty"`
+	RevisedPrompt     string `json:"revised_prompt,omitempty"`
 }

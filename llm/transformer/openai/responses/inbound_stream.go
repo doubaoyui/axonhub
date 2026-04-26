@@ -38,6 +38,48 @@ func applyImageGenerationMetadataToItem(item *Item, metadata map[string]any) {
 	}
 }
 
+func stringPtrIfNotEmpty(value string) *string {
+	if value == "" {
+		return nil
+	}
+
+	return lo.ToPtr(value)
+}
+
+func imageGenerationItemFromToolCall(itemID string, imageCall *llm.ImageGenerationToolCall, defaultStatus string) Item {
+	status := defaultStatus
+	if imageCall != nil && imageCall.Status != "" {
+		status = imageCall.Status
+	}
+
+	var result string
+	if imageCall != nil {
+		result = imageCall.Result
+		if result == "" {
+			result = imageCall.PartialImageB64
+		}
+	}
+
+	item := Item{
+		ID:     itemID,
+		Type:   "image_generation_call",
+		Status: stringPtrIfNotEmpty(status),
+		Result: stringPtrIfNotEmpty(result),
+	}
+	if imageCall == nil {
+		return item
+	}
+
+	item.Action = imageCall.Action
+	item.Background = stringPtrIfNotEmpty(imageCall.Background)
+	item.OutputFormat = stringPtrIfNotEmpty(imageCall.OutputFormat)
+	item.Quality = stringPtrIfNotEmpty(imageCall.Quality)
+	item.Size = stringPtrIfNotEmpty(imageCall.Size)
+	item.RevisedPrompt = stringPtrIfNotEmpty(imageCall.RevisedPrompt)
+
+	return item
+}
+
 // TransformStream transforms the unified llm.Response stream to OpenAI Responses API SSE events.
 func (t *InboundTransformer) TransformStream(
 	ctx context.Context,
@@ -640,6 +682,10 @@ func (s *responsesInboundStream) handleToolCalls(toolCalls []llm.ToolCall) error
 		switch {
 		case tc.WebSearchToolCall != nil:
 			s.toolCalls[toolCallIndex].WebSearchToolCall = tc.WebSearchToolCall
+		case tc.ImageGenerationToolCall != nil:
+			if err := s.handleImageGenerationToolCallDelta(tc); err != nil {
+				return err
+			}
 		case tc.ResponseCustomToolCall != nil:
 			if err := s.handleCustomToolCallDelta(tc); err != nil {
 				return err
@@ -666,11 +712,12 @@ func (s *responsesInboundStream) initToolCall(tc llm.ToolCall) error {
 	}
 
 	s.toolCalls[toolCallIndex] = &llm.ToolCall{
-		Index:                  toolCallIndex,
-		ID:                     tc.ID,
-		Type:                   tc.Type,
-		ResponseCustomToolCall: tc.ResponseCustomToolCall,
-		WebSearchToolCall:      tc.WebSearchToolCall,
+		Index:                   toolCallIndex,
+		ID:                      tc.ID,
+		Type:                    tc.Type,
+		ResponseCustomToolCall:  tc.ResponseCustomToolCall,
+		WebSearchToolCall:       tc.WebSearchToolCall,
+		ImageGenerationToolCall: tc.ImageGenerationToolCall,
 		Function: llm.FunctionCall{
 			Name:      tc.Function.Name,
 			Arguments: "",
@@ -715,6 +762,26 @@ func (s *responsesInboundStream) initToolCall(tc llm.ToolCall) error {
 		})
 		if err != nil {
 			return fmt.Errorf("failed to enqueue web_search_call.searching event: %w", err)
+		}
+
+	case tc.ImageGenerationToolCall != nil:
+		status := tc.ImageGenerationToolCall.Status
+		if status == "" {
+			status = "in_progress"
+		}
+		item := &Item{
+			ID:     itemID,
+			Type:   "image_generation_call",
+			Status: lo.ToPtr(status),
+		}
+
+		err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeOutputItemAdded,
+			OutputIndex: s.outputIndex,
+			Item:        item,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to enqueue image_generation output_item.added event: %w", err)
 		}
 
 	case tc.ResponseCustomToolCall != nil:
@@ -812,6 +879,177 @@ func (s *responsesInboundStream) handleCustomToolCallDelta(tc llm.ToolCall) erro
 	}
 
 	return nil
+}
+
+func (s *responsesInboundStream) handleImageGenerationToolCallDelta(tc llm.ToolCall) error {
+	toolCallIndex := tc.Index
+	current := s.toolCalls[toolCallIndex].ImageGenerationToolCall
+	update := tc.ImageGenerationToolCall
+	if current == nil || update == nil {
+		return nil
+	}
+
+	if update.ID != "" {
+		current.ID = update.ID
+	}
+	if update.EventType != "" {
+		current.EventType = update.EventType
+	}
+	if update.Status != "" {
+		current.Status = update.Status
+	}
+	if update.Action != nil {
+		current.Action = update.Action
+	}
+	if update.Result != "" {
+		current.Result = update.Result
+	}
+	if update.PartialImageB64 != "" {
+		current.PartialImageB64 = update.PartialImageB64
+	}
+	if update.PartialImageIndex != nil {
+		current.PartialImageIndex = update.PartialImageIndex
+	}
+	if update.Background != "" {
+		current.Background = update.Background
+	}
+	if update.OutputFormat != "" {
+		current.OutputFormat = update.OutputFormat
+	}
+	if update.Quality != "" {
+		current.Quality = update.Quality
+	}
+	if update.Size != "" {
+		current.Size = update.Size
+	}
+	if update.RevisedPrompt != "" {
+		current.RevisedPrompt = update.RevisedPrompt
+	}
+
+	itemID := current.ID
+	if itemID == "" {
+		itemID = s.toolCalls[toolCallIndex].ID
+	}
+	if itemID == "" {
+		itemID = s.currentItemID
+	}
+
+	status := current.Status
+	if status == "" {
+		status = imageGenerationStatusForEvent(StreamEventType(current.EventType), "")
+	}
+	if status == "" {
+		status = "generating"
+	}
+
+	switch current.EventType {
+	case "", string(StreamEventTypeOutputItemAdded):
+		return nil
+	case string(StreamEventTypeImageGenerationInProgress):
+		if err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeImageGenerationInProgress,
+			ItemID:      &itemID,
+			OutputIndex: s.toolCallOutputIndex[toolCallIndex],
+			Status:      status,
+		}); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation in_progress event: %w", err)
+		}
+	case string(StreamEventTypeImageGenerationGenerating):
+		if err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeImageGenerationGenerating,
+			ItemID:      &itemID,
+			OutputIndex: s.toolCallOutputIndex[toolCallIndex],
+			Status:      status,
+		}); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation generating event: %w", err)
+		}
+	case string(StreamEventTypeImageGenerationCompleted):
+		if err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeImageGenerationCompleted,
+			ItemID:      &itemID,
+			OutputIndex: s.toolCallOutputIndex[toolCallIndex],
+			Status:      status,
+		}); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation completed event: %w", err)
+		}
+	case string(StreamEventTypeOutputItemDone):
+		item := imageGenerationItemFromToolCall(itemID, current, status)
+		if err := s.enqueueEvent(&StreamEvent{
+			Type:        StreamEventTypeOutputItemDone,
+			OutputIndex: s.toolCallOutputIndex[toolCallIndex],
+			Item:        &item,
+		}); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation output_item.done event: %w", err)
+		}
+		s.toolCallItemStarted[toolCallIndex] = false
+		return nil
+	case string(StreamEventTypeResponseCompleted):
+		s.updateAggregatedImageGenerationItem(toolCallIndex, itemID, current)
+		return nil
+	}
+
+	if current.EventType == string(StreamEventTypeImageGenerationPartialImage) && current.PartialImageB64 != "" {
+		partialImageEvent := &StreamEvent{
+			Type:              StreamEventTypeImageGenerationPartialImage,
+			ItemID:            &itemID,
+			OutputIndex:       s.toolCallOutputIndex[toolCallIndex],
+			PartialImageB64:   current.PartialImageB64,
+			PartialImageIndex: current.PartialImageIndex,
+			Status:            status,
+			Background:        current.Background,
+			OutputFormat:      current.OutputFormat,
+			Quality:           current.Quality,
+			Size:              current.Size,
+			RevisedPrompt:     current.RevisedPrompt,
+		}
+		if err := s.enqueueEvent(partialImageEvent); err != nil {
+			return fmt.Errorf("failed to enqueue image_generation partial_image event: %w", err)
+		}
+		current.Result = current.PartialImageB64
+	}
+
+	return nil
+}
+
+func (s *responsesInboundStream) updateAggregatedImageGenerationItem(
+	toolCallIndex int,
+	itemID string,
+	imageCall *llm.ImageGenerationToolCall,
+) {
+	if s.aggregator == nil || imageCall == nil {
+		return
+	}
+
+	outputIndex := s.toolCallOutputIndex[toolCallIndex]
+	item := s.aggregator.getItemForEvent(outputIndex, &itemID)
+	if item == nil {
+		return
+	}
+
+	if imageCall.Status != "" {
+		item.Status = imageCall.Status
+	}
+	if imageCall.Action != nil {
+		item.Action = imageCall.Action
+	}
+	if imageCall.Result != "" {
+		item.Result = lo.ToPtr(imageCall.Result)
+	}
+	if imageCall.Background != "" {
+		item.Background = lo.ToPtr(imageCall.Background)
+	}
+	if imageCall.OutputFormat != "" {
+		item.OutputFormat = lo.ToPtr(imageCall.OutputFormat)
+	}
+	if imageCall.Quality != "" {
+		item.Quality = lo.ToPtr(imageCall.Quality)
+	}
+	if imageCall.Size != "" {
+		item.Size = lo.ToPtr(imageCall.Size)
+	}
+	if imageCall.RevisedPrompt != "" {
+		item.RevisedPrompt = lo.ToPtr(imageCall.RevisedPrompt)
+	}
 }
 
 func (s *responsesInboundStream) closeReasoningItem() error {
@@ -1027,6 +1265,19 @@ func (s *responsesInboundStream) closeCurrentOutputItem() error {
 			})
 			if err != nil {
 				return fmt.Errorf("failed to enqueue output_item.done event: %w", err)
+			}
+
+		case tc.ImageGenerationToolCall != nil:
+			imageCall := tc.ImageGenerationToolCall
+			item := imageGenerationItemFromToolCall(itemID, imageCall, "generating")
+
+			err := s.enqueueEvent(&StreamEvent{
+				Type:        StreamEventTypeOutputItemDone,
+				OutputIndex: s.toolCallOutputIndex[idx],
+				Item:        &item,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to enqueue image_generation output_item.done event: %w", err)
 			}
 
 		case tc.ResponseCustomToolCall != nil:

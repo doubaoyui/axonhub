@@ -188,7 +188,7 @@ func TestOutboundTransformer_TransformStream_PreservesPreviousResponseID(t *test
 	require.Equal(t, llm.DoneResponse, actual[3])
 }
 
-func TestOutboundTransformer_TransformStream_ImageGenerationPartialImagePreservesRevisedPrompt(t *testing.T) {
+func TestOutboundTransformer_TransformStream_ImageGenerationPartialImageUsesToolCall(t *testing.T) {
 	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
 	require.NoError(t, err)
 
@@ -220,20 +220,11 @@ func TestOutboundTransformer_TransformStream_ImageGenerationPartialImagePreserve
 			}`),
 		},
 		{
-			Type: "response.output_item.done",
+			Type: "response.image_generation_call.generating",
 			Data: []byte(`{
-				"type":"response.output_item.done",
+				"type":"response.image_generation_call.generating",
 				"output_index":0,
-				"item":{
-					"id":"ig_123",
-					"type":"image_generation_call",
-					"status":"completed",
-					"background":"opaque",
-					"output_format":"png",
-					"quality":"high",
-					"size":"1024x1024",
-					"revised_prompt":"A watercolor fox under moonlight"
-				}
+				"item_id":"ig_123"
 			}`),
 		},
 		{
@@ -242,6 +233,11 @@ func TestOutboundTransformer_TransformStream_ImageGenerationPartialImagePreserve
 				"type":"response.image_generation_call.partial_image",
 				"output_index":0,
 				"item_id":"ig_123",
+				"background":"opaque",
+				"output_format":"png",
+				"quality":"high",
+				"size":"1024x1024",
+				"revised_prompt":"A watercolor fox under moonlight",
 				"partial_image_b64":"base64data"
 			}`),
 		},
@@ -252,41 +248,32 @@ func TestOutboundTransformer_TransformStream_ImageGenerationPartialImagePreserve
 
 	actual, err := streams.All(stream)
 	require.NoError(t, err)
-	require.Len(t, actual, 3)
+	require.Len(t, actual, 5)
 
-	var part llm.MessageContentPart
-	var foundPart bool
-	for _, resp := range actual {
-		if resp == nil || resp == llm.DoneResponse || len(resp.Choices) == 0 {
-			continue
-		}
-		choice := resp.Choices[0]
-		if choice.Delta != nil && len(choice.Delta.Content.MultipleContent) > 0 {
-			part = choice.Delta.Content.MultipleContent[0]
-			foundPart = true
-		}
-	}
+	added := findImageGenerationToolCall(actual, string(StreamEventTypeOutputItemAdded))
+	require.NotNil(t, added)
+	require.Equal(t, "ig_123", added.ID)
+	require.Equal(t, "in_progress", added.Status)
 
-	require.True(t, foundPart)
-	require.NotNil(t, part.ImageURL)
-	require.Equal(t, "data:image/png;base64,base64data", part.ImageURL.URL)
-	require.NotNil(t, part.TransformerMetadata)
-	require.Equal(t, "opaque", part.TransformerMetadata["background"])
-	require.Equal(t, "png", part.TransformerMetadata["output_format"])
-	require.Equal(t, "high", part.TransformerMetadata["quality"])
-	require.Equal(t, "1024x1024", part.TransformerMetadata["size"])
-	require.Equal(t, "A watercolor fox under moonlight", part.TransformerMetadata["revised_prompt"])
+	generating := findImageGenerationToolCall(actual, string(StreamEventTypeImageGenerationGenerating))
+	require.NotNil(t, generating)
+	require.Equal(t, "ig_123", generating.ID)
+	require.Equal(t, "generating", generating.Status)
 
-	if actual[1].Choices[0].TransformerMetadata != nil {
-		if rawUpdates, ok := actual[1].Choices[0].TransformerMetadata["image_generation_item_updates"]; ok && rawUpdates != nil {
-			updates := rawUpdates.(map[string]any)
-			require.Equal(t, "A watercolor fox under moonlight", updates["ig_123"].(map[string]any)["revised_prompt"])
-		}
-	}
-	require.Equal(t, llm.DoneResponse, actual[2])
+	partial := findImageGenerationToolCall(actual, string(StreamEventTypeImageGenerationPartialImage))
+	require.NotNil(t, partial)
+	require.Equal(t, "ig_123", partial.ID)
+	require.Equal(t, "generating", partial.Status)
+	require.Equal(t, "base64data", partial.PartialImageB64)
+	require.Equal(t, "opaque", partial.Background)
+	require.Equal(t, "png", partial.OutputFormat)
+	require.Equal(t, "high", partial.Quality)
+	require.Equal(t, "1024x1024", partial.Size)
+	require.Equal(t, "A watercolor fox under moonlight", partial.RevisedPrompt)
+	require.Equal(t, llm.DoneResponse, actual[4])
 }
 
-func TestOutboundTransformer_TransformStream_ImageGenerationPartialImageUsesTopLevelFields(t *testing.T) {
+func TestOutboundTransformer_TransformStream_ImageGenerationOutputItemDoneUsesToolCall(t *testing.T) {
 	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
 	require.NoError(t, err)
 
@@ -332,6 +319,24 @@ func TestOutboundTransformer_TransformStream_ImageGenerationPartialImageUsesTopL
 				"partial_image_b64":"base64data"
 			}`),
 		},
+		{
+			Type: "response.output_item.done",
+			Data: []byte(`{
+				"type":"response.output_item.done",
+				"output_index":0,
+				"item":{
+					"id":"ig_234",
+					"type":"image_generation_call",
+					"status":"completed",
+					"result":"base64data",
+					"background":"opaque",
+					"output_format":"png",
+					"quality":"high",
+					"size":"853x1844",
+					"revised_prompt":"done revised prompt"
+				}
+			}`),
+		},
 	}
 
 	stream, err := trans.TransformStream(context.Background(), streams.SliceStream(events))
@@ -339,38 +344,45 @@ func TestOutboundTransformer_TransformStream_ImageGenerationPartialImageUsesTopL
 
 	actual, err := streams.All(stream)
 	require.NoError(t, err)
-	require.Len(t, actual, 3)
+	require.Len(t, actual, 5)
 
-	part := actual[1].Choices[0].Delta.Content.MultipleContent[0]
-	require.NotNil(t, part.TransformerMetadata)
-	require.Equal(t, "opaque", part.TransformerMetadata["background"])
-	require.Equal(t, "png", part.TransformerMetadata["output_format"])
-	require.Equal(t, "high", part.TransformerMetadata["quality"])
-	require.Equal(t, "853x1844", part.TransformerMetadata["size"])
-	require.Equal(t, "a revised prompt", part.TransformerMetadata["revised_prompt"])
-	require.Equal(t, llm.DoneResponse, actual[2])
+	done := findImageGenerationToolCall(actual, string(StreamEventTypeOutputItemDone))
+	require.NotNil(t, done)
+	require.Equal(t, "ig_234", done.ID)
+	require.Equal(t, "completed", done.Status)
+	require.Equal(t, "base64data", done.Result)
+	require.Equal(t, "opaque", done.Background)
+	require.Equal(t, "png", done.OutputFormat)
+	require.Equal(t, "high", done.Quality)
+	require.Equal(t, "853x1844", done.Size)
+	require.Equal(t, "done revised prompt", done.RevisedPrompt)
+	require.Equal(t, llm.DoneResponse, actual[4])
 }
 
-func TestOutboundTransformer_TransformStream_ImageGenerationOutputItemDoneEmitsLateMetadataUpdate(t *testing.T) {
+func TestOutboundTransformer_TransformStream_ImageGenerationResponseCompletedUsesToolCall(t *testing.T) {
 	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
 	require.NoError(t, err)
 
 	events := []*httpclient.StreamEvent{
 		{
 			Type: "response.created",
-			Data: []byte(`{"type":"response.created","response":{"id":"resp_img_stream3","object":"response","created_at":1700000000,"model":"gpt-5.4","status":"in_progress","output":[]}}`),
+			Data: []byte(`{"type":"response.created","response":{"id":"resp_img_stream4","object":"response","created_at":1700000000,"model":"gpt-5.4","status":"in_progress","output":[]}}`),
 		},
 		{
 			Type: "response.output_item.added",
-			Data: []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"ig_345","type":"image_generation_call","status":"in_progress"}}`),
+			Data: []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"ig_456","type":"image_generation_call","status":"in_progress"}}`),
 		},
 		{
 			Type: "response.image_generation_call.partial_image",
-			Data: []byte(`{"type":"response.image_generation_call.partial_image","output_index":0,"item_id":"ig_345","status":"generating","partial_image_b64":"base64data"}`),
+			Data: []byte(`{"type":"response.image_generation_call.partial_image","output_index":0,"item_id":"ig_456","status":"generating","partial_image_b64":"base64data"}`),
 		},
 		{
 			Type: "response.output_item.done",
-			Data: []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"ig_345","type":"image_generation_call","status":"completed","revised_prompt":"late revised prompt"}}`),
+			Data: []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"ig_456","type":"image_generation_call","status":"generating","result":"base64data","background":"opaque","output_format":"png","quality":"high","size":"1024x1024"}}`),
+		},
+		{
+			Type: "response.completed",
+			Data: []byte(`{"type":"response.completed","response":{"id":"resp_img_stream4","object":"response","created_at":1700000000,"model":"gpt-5.4","status":"completed","output":[{"id":"ig_456","type":"image_generation_call","status":"generating","result":"base64data","background":"opaque","output_format":"png","quality":"high","size":"1024x1024","revised_prompt":"completed revised prompt"}]}}`),
 		},
 	}
 
@@ -379,9 +391,38 @@ func TestOutboundTransformer_TransformStream_ImageGenerationOutputItemDoneEmitsL
 
 	actual, err := streams.All(stream)
 	require.NoError(t, err)
-	require.Len(t, actual, 4)
+	require.Len(t, actual, 7)
 
-	updates := actual[2].Choices[0].TransformerMetadata["image_generation_item_updates"].(map[string]any)
-	require.Equal(t, "late revised prompt", updates["ig_345"].(map[string]any)["revised_prompt"])
-	require.Equal(t, llm.DoneResponse, actual[3])
+	completed := findImageGenerationToolCall(actual, string(StreamEventTypeResponseCompleted))
+	require.NotNil(t, completed)
+	require.Equal(t, "ig_456", completed.ID)
+	require.Equal(t, "generating", completed.Status)
+	require.Equal(t, "base64data", completed.Result)
+	require.Equal(t, "opaque", completed.Background)
+	require.Equal(t, "png", completed.OutputFormat)
+	require.Equal(t, "high", completed.Quality)
+	require.Equal(t, "1024x1024", completed.Size)
+	require.Equal(t, "completed revised prompt", completed.RevisedPrompt)
+	require.Equal(t, llm.DoneResponse, actual[6])
+}
+
+func findImageGenerationToolCall(responses []*llm.Response, eventType string) *llm.ImageGenerationToolCall {
+	for _, resp := range responses {
+		if resp == nil || resp == llm.DoneResponse {
+			continue
+		}
+		for _, choice := range resp.Choices {
+			if choice.Delta == nil {
+				continue
+			}
+			for i := range choice.Delta.ToolCalls {
+				tc := &choice.Delta.ToolCalls[i]
+				if tc.ImageGenerationToolCall != nil && tc.ImageGenerationToolCall.EventType == eventType {
+					return tc.ImageGenerationToolCall
+				}
+			}
+		}
+	}
+
+	return nil
 }

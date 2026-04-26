@@ -200,6 +200,214 @@ func TestInboundTransformer_StreamTransformation_ImageGenerationEmitsProtocolEve
 	require.Equal(t, lo.ToPtr("A watercolor fox under moonlight"), outputItemDoneEvent.Item.RevisedPrompt)
 }
 
+func TestInboundTransformer_StreamTransformation_ImageGenerationToolCallRoundTrip(t *testing.T) {
+	trans := NewInboundTransformer()
+
+	llmResponses := []*llm.Response{
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "resp_img_tool_call",
+			Model:   "gpt-5.4",
+			Created: 1700000000,
+			Choices: []llm.Choice{
+				{
+					Index: 0,
+					Delta: &llm.Message{
+						ToolCalls: []llm.ToolCall{
+							{
+								ID:    "ig_123",
+								Type:  llm.ToolTypeImageGeneration,
+								Index: 0,
+								ImageGenerationToolCall: &llm.ImageGenerationToolCall{
+									ID:        "ig_123",
+									EventType: string(StreamEventTypeOutputItemAdded),
+									Status:    "in_progress",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		imageGenerationToolCallResponse("resp_img_tool_call", "ig_123", string(StreamEventTypeImageGenerationInProgress), "in_progress", ""),
+		imageGenerationToolCallResponse("resp_img_tool_call", "ig_123", string(StreamEventTypeImageGenerationGenerating), "generating", ""),
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "resp_img_tool_call",
+			Model:   "gpt-5.4",
+			Created: 1700000000,
+			Choices: []llm.Choice{
+				{
+					Index: 0,
+					Delta: &llm.Message{
+						ToolCalls: []llm.ToolCall{
+							{
+								ID:    "ig_123",
+								Type:  llm.ToolTypeImageGeneration,
+								Index: 0,
+								ImageGenerationToolCall: &llm.ImageGenerationToolCall{
+									ID:                "ig_123",
+									EventType:         string(StreamEventTypeImageGenerationPartialImage),
+									Status:            "generating",
+									PartialImageB64:   "base64data",
+									PartialImageIndex: lo.ToPtr(0),
+									Background:        "opaque",
+									OutputFormat:      "png",
+									Quality:           "high",
+									Size:              "1024x1536",
+									RevisedPrompt:     "A watercolor fox under moonlight",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "resp_img_tool_call",
+			Model:   "gpt-5.4",
+			Created: 1700000000,
+			Choices: []llm.Choice{
+				{
+					Index: 0,
+					Delta: &llm.Message{
+						ToolCalls: []llm.ToolCall{
+							{
+								ID:    "ig_123",
+								Type:  llm.ToolTypeImageGeneration,
+								Index: 0,
+								ImageGenerationToolCall: &llm.ImageGenerationToolCall{
+									ID:            "ig_123",
+									EventType:     string(StreamEventTypeOutputItemDone),
+									Status:        "completed",
+									Result:        "base64data",
+									Background:    "opaque",
+									OutputFormat:  "png",
+									Quality:       "high",
+									Size:          "1024x1536",
+									RevisedPrompt: "A watercolor fox under moonlight",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "resp_img_tool_call",
+			Model:   "gpt-5.4",
+			Created: 1700000000,
+			Choices: []llm.Choice{
+				{
+					Index:        0,
+					Delta:        &llm.Message{},
+					FinishReason: lo.ToPtr("stop"),
+				},
+			},
+		},
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "resp_img_tool_call",
+			Model:   "gpt-5.4",
+			Created: 1700000000,
+			Usage: &llm.Usage{
+				PromptTokens:     1,
+				CompletionTokens: 1,
+				TotalTokens:      2,
+			},
+		},
+	}
+
+	transformedStream, err := trans.TransformStream(t.Context(), streams.SliceStream(llmResponses))
+	require.NoError(t, err)
+
+	var actualEvents []StreamEvent
+	for transformedStream.Next() {
+		event := transformedStream.Current()
+		var ev StreamEvent
+		err := json.Unmarshal(event.Data, &ev)
+		require.NoError(t, err)
+		actualEvents = append(actualEvents, ev)
+	}
+	require.NoError(t, transformedStream.Err())
+
+	eventTypes := make([]StreamEventType, 0, len(actualEvents))
+	var partialEvent *StreamEvent
+	var doneEvent *StreamEvent
+	var completedEvent *StreamEvent
+	for i := range actualEvents {
+		ev := &actualEvents[i]
+		eventTypes = append(eventTypes, ev.Type)
+		switch ev.Type {
+		case StreamEventTypeImageGenerationPartialImage:
+			partialEvent = ev
+		case StreamEventTypeOutputItemDone:
+			if ev.Item != nil && ev.Item.Type == "image_generation_call" {
+				doneEvent = ev
+			}
+		case StreamEventTypeResponseCompleted:
+			completedEvent = ev
+		}
+	}
+
+	require.Contains(t, eventTypes, StreamEventTypeOutputItemAdded)
+	require.Contains(t, eventTypes, StreamEventTypeImageGenerationInProgress)
+	require.Contains(t, eventTypes, StreamEventTypeImageGenerationGenerating)
+	require.Contains(t, eventTypes, StreamEventTypeImageGenerationPartialImage)
+	require.Contains(t, eventTypes, StreamEventTypeOutputItemDone)
+	require.NotContains(t, eventTypes, StreamEventTypeImageGenerationCompleted)
+
+	require.NotNil(t, partialEvent)
+	require.Equal(t, "ig_123", lo.FromPtr(partialEvent.ItemID))
+	require.Equal(t, "base64data", partialEvent.PartialImageB64)
+	require.Equal(t, lo.ToPtr(0), partialEvent.PartialImageIndex)
+	require.Equal(t, "A watercolor fox under moonlight", partialEvent.RevisedPrompt)
+
+	require.NotNil(t, doneEvent)
+	require.NotNil(t, doneEvent.Item)
+	require.Equal(t, lo.ToPtr("completed"), doneEvent.Item.Status)
+	require.Equal(t, lo.ToPtr("base64data"), doneEvent.Item.Result)
+	require.Equal(t, lo.ToPtr("A watercolor fox under moonlight"), doneEvent.Item.RevisedPrompt)
+
+	require.NotNil(t, completedEvent)
+	require.Len(t, completedEvent.Response.Output, 1)
+	require.Equal(t, "image_generation_call", completedEvent.Response.Output[0].Type)
+	require.Equal(t, lo.ToPtr("A watercolor fox under moonlight"), completedEvent.Response.Output[0].RevisedPrompt)
+}
+
+func imageGenerationToolCallResponse(responseID string, itemID string, eventType string, status string, partialImageB64 string) *llm.Response {
+	imageCall := &llm.ImageGenerationToolCall{
+		ID:              itemID,
+		EventType:       eventType,
+		Status:          status,
+		PartialImageB64: partialImageB64,
+	}
+
+	return &llm.Response{
+		Object:  "chat.completion.chunk",
+		ID:      responseID,
+		Model:   "gpt-5.4",
+		Created: 1700000000,
+		Choices: []llm.Choice{
+			{
+				Index: 0,
+				Delta: &llm.Message{
+					ToolCalls: []llm.ToolCall{
+						{
+							ID:                      itemID,
+							Type:                    llm.ToolTypeImageGeneration,
+							Index:                   0,
+							ImageGenerationToolCall: imageCall,
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func TestInboundTransformer_StreamTransformation_ImageGenerationLateMetadataUpdate(t *testing.T) {
 	trans := NewInboundTransformer()
 
