@@ -77,7 +77,7 @@ func TestRequestFromLLM(t *testing.T) {
 
 func TestRequestFromLLM_FiltersResponsesCustomTools(t *testing.T) {
 	req := RequestFromLLM(&llm.Request{
-		Model: "gpt-4o",
+		Model:    "gpt-4o",
 		Messages: []llm.Message{{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}}},
 		Tools: []llm.Tool{
 			{
@@ -99,6 +99,41 @@ func TestRequestFromLLM_FiltersResponsesCustomTools(t *testing.T) {
 	require.NotNil(t, req)
 	require.Len(t, req.Tools, 1)
 	require.Equal(t, llm.ToolTypeFunction, req.Tools[0].Type)
+}
+
+func TestRequestFromLLM_FiltersNonFunctionToolCalls(t *testing.T) {
+	req := RequestFromLLM(&llm.Request{
+		Model: "gpt-4o",
+		Messages: []llm.Message{
+			{
+				Role: "assistant",
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "ws_1",
+						Type: llm.ToolTypeWebSearch,
+						WebSearchToolCall: &llm.WebSearchToolCall{
+							ID:     "ws_1",
+							Status: "completed",
+						},
+					},
+					{
+						ID:   "call_function_1",
+						Type: llm.ToolTypeFunction,
+						Function: llm.FunctionCall{
+							Name:      "get_weather",
+							Arguments: "{\"city\":\"Shanghai\"}",
+						},
+					},
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, req)
+	require.Len(t, req.Messages, 1)
+	require.Len(t, req.Messages[0].ToolCalls, 1)
+	require.Equal(t, llm.ToolTypeFunction, req.Messages[0].ToolCalls[0].Type)
+	require.Equal(t, "call_function_1", req.Messages[0].ToolCalls[0].ID)
 }
 
 func TestMessageContentPartAudioRoundTrip(t *testing.T) {

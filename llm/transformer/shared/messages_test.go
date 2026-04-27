@@ -88,3 +88,44 @@ func TestFilterOutResponseCustomToolMessages_KeepsVisibleAssistantMessage(t *tes
 	require.Equal(t, "I'll update that.", *got[0].Content.Content)
 	require.Empty(t, got[0].ToolCalls)
 }
+
+func TestFilterOutResponseCustomToolMessages_RemovesResponsesBuiltinToolCalls(t *testing.T) {
+	input := []llm.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "ws_1",
+					Type: llm.ToolTypeWebSearch,
+					WebSearchToolCall: &llm.WebSearchToolCall{
+						ID:     "ws_1",
+						Status: "completed",
+					},
+				},
+				{
+					ID:   "ig_1",
+					Type: llm.ToolTypeImageGeneration,
+					ImageGenerationToolCall: &llm.ImageGenerationToolCall{
+						ID:     "ig_1",
+						Status: "completed",
+					},
+				},
+				{
+					ID:   "call_function_1",
+					Type: llm.ToolTypeFunction,
+					Function: llm.FunctionCall{
+						Name:      "get_weather",
+						Arguments: "{\"city\":\"Shanghai\"}",
+					},
+				},
+			},
+		},
+	}
+
+	got := FilterOutResponseCustomToolMessages(input)
+
+	require.Len(t, got, 1)
+	require.Len(t, got[0].ToolCalls, 1)
+	require.Equal(t, llm.ToolTypeFunction, got[0].ToolCalls[0].Type)
+	require.Equal(t, "call_function_1", got[0].ToolCalls[0].ID)
+}

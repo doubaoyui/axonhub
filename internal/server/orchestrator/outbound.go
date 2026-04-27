@@ -360,7 +360,7 @@ func filterResponseCustomToolMessagesForNonResponsesOutbound(
 		return nil
 	}
 
-	if !isResponsesFormat(llmRequest.APIFormat) || isResponsesFormat(outboundFormat) || !containsResponseCustomToolMessages(llmRequest.Messages) {
+	if !isResponsesFormat(llmRequest.APIFormat) || isResponsesFormat(outboundFormat) || !containsResponsesOnlyToolMessages(llmRequest.Messages) {
 		return llmRequest
 	}
 
@@ -374,10 +374,15 @@ func isResponsesFormat(format llm.APIFormat) bool {
 	return format == llm.APIFormatOpenAIResponse || format == llm.APIFormatOpenAIResponseCompact
 }
 
-func containsResponseCustomToolMessages(messages []llm.Message) bool {
+func containsResponsesOnlyToolMessages(messages []llm.Message) bool {
 	for _, msg := range messages {
 		for _, toolCall := range msg.ToolCalls {
-			if toolCall.Type == llm.ToolTypeResponsesCustomTool || toolCall.ResponseCustomToolCall != nil {
+			if toolCall.Type == llm.ToolTypeResponsesCustomTool ||
+				toolCall.Type == llm.ToolTypeWebSearch ||
+				toolCall.Type == llm.ToolTypeImageGeneration ||
+				toolCall.ResponseCustomToolCall != nil ||
+				toolCall.WebSearchToolCall != nil ||
+				toolCall.ImageGenerationToolCall != nil {
 				return true
 			}
 		}

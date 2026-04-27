@@ -137,8 +137,11 @@ func MessageFromLLM(m llm.Message) Message {
 
 	// Convert ToolCalls
 	if m.ToolCalls != nil {
-		msg.ToolCalls = lo.Map(m.ToolCalls, func(tc llm.ToolCall, _ int) ToolCall {
-			return ToolCallFromLLM(tc)
+		msg.ToolCalls = lo.FilterMap(m.ToolCalls, func(tc llm.ToolCall, _ int) (ToolCall, bool) {
+			if tc.Type != llm.ToolTypeFunction {
+				return ToolCall{}, false
+			}
+			return ToolCallFromLLM(tc), true
 		})
 	}
 

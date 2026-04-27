@@ -2,14 +2,14 @@ package shared
 
 import "github.com/looplj/axonhub/llm"
 
-// FilterOutResponseCustomToolMessages removes Responses-only custom tool calls
-// from assistant messages and drops tool result messages that correspond to
-// those removed custom tool calls.
+// FilterOutResponseCustomToolMessages removes Responses-only tool calls from
+// assistant messages and drops tool result messages that correspond to those
+// removed tool calls.
 //
 // This is intended for compatibility when a request originates from an OpenAI
 // Responses session and is then routed to a non-Responses channel. In that
-// case, Responses-only custom tools must be stripped from the message history
-// before the outbound transformer encodes the request for the target channel.
+// case, Responses-only tools must be stripped from the message history before
+// the outbound transformer encodes the request for the target channel.
 func FilterOutResponseCustomToolMessages(messages []llm.Message) []llm.Message {
 	if len(messages) == 0 {
 		return nil
@@ -34,7 +34,7 @@ func FilterOutResponseCustomToolMessages(messages []llm.Message) []llm.Message {
 		cloned.ToolCalls = make([]llm.ToolCall, 0, len(msg.ToolCalls))
 
 		for _, toolCall := range msg.ToolCalls {
-			if toolCall.Type == llm.ToolTypeResponsesCustomTool || toolCall.ResponseCustomToolCall != nil {
+			if isResponsesOnlyToolCall(toolCall) {
 				if toolCall.ID != "" {
 					removedToolCallIDs[toolCall.ID] = struct{}{}
 				}
@@ -56,6 +56,15 @@ func FilterOutResponseCustomToolMessages(messages []llm.Message) []llm.Message {
 	}
 
 	return filtered
+}
+
+func isResponsesOnlyToolCall(toolCall llm.ToolCall) bool {
+	return toolCall.Type == llm.ToolTypeResponsesCustomTool ||
+		toolCall.Type == llm.ToolTypeWebSearch ||
+		toolCall.Type == llm.ToolTypeImageGeneration ||
+		toolCall.ResponseCustomToolCall != nil ||
+		toolCall.WebSearchToolCall != nil ||
+		toolCall.ImageGenerationToolCall != nil
 }
 
 func shouldDropMessageAfterToolFiltering(msg llm.Message) bool {

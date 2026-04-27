@@ -278,6 +278,60 @@ func TestOutboundTransformer_TransformRequest_DropsReasoningOnlyAssistantMessage
 	assert.Equal(t, "不可以使用 mcp ?", lo.FromPtr(dsReq.Messages[1].Content.Content))
 }
 
+func TestOutboundTransformer_TransformRequest_FiltersResponsesBuiltinToolCalls(t *testing.T) {
+	config := &Config{
+		BaseURL:        "https://api.deepseek.com/v1",
+		APIKeyProvider: auth.NewStaticKeyProvider("test-api-key"),
+	}
+
+	transformer, err := NewOutboundTransformerWithConfig(config)
+	require.NoError(t, err)
+
+	request := &llm.Request{
+		Model: "deepseek-chat",
+		Messages: []llm.Message{
+			{
+				Role: "assistant",
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "ws_1",
+						Type: llm.ToolTypeWebSearch,
+						WebSearchToolCall: &llm.WebSearchToolCall{
+							ID:     "ws_1",
+							Status: "completed",
+						},
+					},
+					{
+						ID:   "call_function_1",
+						Type: llm.ToolTypeFunction,
+						Function: llm.FunctionCall{
+							Name:      "get_weather",
+							Arguments: "{\"city\":\"Shanghai\"}",
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("继续回答"),
+				},
+			},
+		},
+	}
+
+	got, err := transformer.TransformRequest(context.Background(), request)
+	require.NoError(t, err)
+
+	var dsReq Request
+	err = json.Unmarshal(got.Body, &dsReq)
+	require.NoError(t, err)
+	require.Len(t, dsReq.Messages, 2)
+	require.Len(t, dsReq.Messages[0].ToolCalls, 1)
+	require.Equal(t, llm.ToolTypeFunction, dsReq.Messages[0].ToolCalls[0].Type)
+	require.Equal(t, "call_function_1", dsReq.Messages[0].ToolCalls[0].ID)
+}
+
 func TestOutboundTransformer_TransformRequest_URL(t *testing.T) {
 	tests := []struct {
 		name        string
