@@ -1431,6 +1431,44 @@ func TestConvertReasoningWithFollowing(t *testing.T) {
 			},
 		},
 		{
+			name: "reasoning merged with multiple function calls",
+			items: []Item{
+				{
+					ID:   "reasoning_multi",
+					Type: "reasoning",
+					Summary: []ReasoningSummary{
+						{Type: "summary_text", Text: "I need to call both functions."},
+					},
+				},
+				{
+					Type:      "function_call",
+					CallID:    "call_1",
+					Name:      "first",
+					Arguments: `{}`,
+				},
+				{
+					Type:      "function_call",
+					CallID:    "call_2",
+					Name:      "second",
+					Arguments: `{"x":1}`,
+				},
+			},
+			startIdx: 0,
+			validate: func(t *testing.T, result *llm.Message, consumed int, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Equal(t, 3, consumed)
+				require.Equal(t, "assistant", result.Role)
+				require.NotNil(t, result.ReasoningContent)
+				require.Equal(t, "I need to call both functions.", *result.ReasoningContent)
+				require.Len(t, result.ToolCalls, 2)
+				require.Equal(t, "call_1", result.ToolCalls[0].ID)
+				require.Equal(t, "first", result.ToolCalls[0].Function.Name)
+				require.Equal(t, "call_2", result.ToolCalls[1].ID)
+				require.Equal(t, "second", result.ToolCalls[1].Function.Name)
+			},
+		},
+		{
 			name: "reasoning stops at user message",
 			items: []Item{
 				{
@@ -1587,6 +1625,36 @@ func TestInboundTransformer_TransformRequest_WithReasoningInput(t *testing.T) {
 	}
 }
 
+func TestInboundTransformer_TransformRequest_MergesAdjacentFunctionCalls(t *testing.T) {
+	trans := NewInboundTransformer()
+
+	result, err := trans.TransformRequest(context.Background(), &httpclient.Request{
+		Body: []byte(`{
+			"model": "deepseek-v4-pro",
+			"input": [
+				{"type": "function_call", "call_id": "call_1", "name": "grep_files", "arguments": "{\"pattern\":\"foo\"}"},
+				{"type": "function_call", "call_id": "call_2", "name": "read_file", "arguments": "{\"file_path\":\"README.md\"}"},
+				{"type": "function_call_output", "call_id": "call_1", "output": "grep result"},
+				{"type": "function_call_output", "call_id": "call_2", "output": "file result"}
+			]
+		}`),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Messages, 3)
+	require.Equal(t, "assistant", result.Messages[0].Role)
+	require.Len(t, result.Messages[0].ToolCalls, 2)
+	require.Equal(t, "call_1", result.Messages[0].ToolCalls[0].ID)
+	require.Equal(t, "grep_files", result.Messages[0].ToolCalls[0].Function.Name)
+	require.Equal(t, "call_2", result.Messages[0].ToolCalls[1].ID)
+	require.Equal(t, "read_file", result.Messages[0].ToolCalls[1].Function.Name)
+	require.Equal(t, "tool", result.Messages[1].Role)
+	require.Equal(t, "call_1", *result.Messages[1].ToolCallID)
+	require.Equal(t, "tool", result.Messages[2].Role)
+	require.Equal(t, "call_2", *result.Messages[2].ToolCallID)
+}
+
 func TestInboundTransformer_TransformResponse_WithReasoning(t *testing.T) {
 	trans := NewInboundTransformer()
 
@@ -1645,12 +1713,12 @@ func TestInboundTransformer_TransformResponse_WithReasoning(t *testing.T) {
 				require.Equal(t, "reasoning", reasoningOutput.Type)
 				require.Len(t, reasoningOutput.Summary, 1)
 				require.Equal(t, "summary_text", reasoningOutput.Summary[0].Type)
-					require.Equal(t, "I analyzed the problem step by step.", reasoningOutput.Summary[0].Text)
-					require.NotNil(t, reasoningOutput.EncryptedContent)
-					require.Equal(t, shared.OpenAIEncryptedContentPrefix+"encrypted_data_here", *reasoningOutput.EncryptedContent)
+				require.Equal(t, "I analyzed the problem step by step.", reasoningOutput.Summary[0].Text)
+				require.NotNil(t, reasoningOutput.EncryptedContent)
+				require.Equal(t, shared.OpenAIEncryptedContentPrefix+"encrypted_data_here", *reasoningOutput.EncryptedContent)
 
-					// Second output should be message
-					messageOutput := resp.Output[1]
+				// Second output should be message
+				messageOutput := resp.Output[1]
 				require.Equal(t, "message", messageOutput.Type)
 				require.Equal(t, "assistant", messageOutput.Role)
 

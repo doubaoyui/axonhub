@@ -361,6 +361,21 @@ func convertInputToMessages(input *Input) ([]llm.Message, error) {
 			continue
 		}
 
+		if isAssistantToolCallItem(item) {
+			msg, consumed, err := convertToolCallsWithFollowing(input.Items, i)
+			if err != nil {
+				return nil, err
+			}
+
+			if msg != nil {
+				messages = append(messages, *msg)
+			}
+
+			i += consumed
+
+			continue
+		}
+
 		// Handle regular items
 		msg, err := convertItemToMessage(item)
 		if err != nil {
@@ -375,6 +390,77 @@ func convertInputToMessages(input *Input) ([]llm.Message, error) {
 	}
 
 	return messages, nil
+}
+
+func isAssistantToolCallItem(item *Item) bool {
+	if item == nil {
+		return false
+	}
+
+	return item.Type == "function_call" || item.Type == "custom_tool_call" || item.Type == "web_search_call"
+}
+
+func appendToolCallFromItem(msg *llm.Message, item *Item) {
+	if msg == nil || item == nil {
+		return
+	}
+
+	switch item.Type {
+	case "function_call":
+		msg.ToolCalls = append(msg.ToolCalls, llm.ToolCall{
+			ID:   item.CallID,
+			Type: "function",
+			Function: llm.FunctionCall{
+				Name:      encodeResponsesFunctionCallName(item.Namespace, item.Name),
+				Arguments: item.Arguments,
+			},
+		})
+	case "custom_tool_call":
+		inputStr := ""
+		if item.Input != nil {
+			inputStr = *item.Input
+		}
+		msg.ToolCalls = append(msg.ToolCalls, llm.ToolCall{
+			ID:   item.CallID,
+			Type: llm.ToolTypeResponsesCustomTool,
+			ResponseCustomToolCall: &llm.ResponseCustomToolCall{
+				CallID: item.CallID,
+				Name:   item.Name,
+				Input:  inputStr,
+			},
+		})
+	case "web_search_call":
+		msg.ToolCalls = append(msg.ToolCalls, llm.ToolCall{
+			ID:   item.ID,
+			Type: llm.ToolTypeWebSearch,
+			WebSearchToolCall: &llm.WebSearchToolCall{
+				ID:     item.ID,
+				Status: lo.FromPtr(item.Status),
+				Action: item.Action,
+			},
+		})
+	}
+}
+
+func convertToolCallsWithFollowing(items []Item, startIdx int) (*llm.Message, int, error) {
+	msg := &llm.Message{Role: "assistant"}
+	consumed := 0
+
+	for i := startIdx; i < len(items); i++ {
+		item := &items[i]
+		if !isAssistantToolCallItem(item) {
+			break
+		}
+
+		appendToolCallFromItem(msg, item)
+		consumed++
+	}
+
+	if consumed == 0 {
+		return nil, 0, nil
+	}
+
+	return msg, consumed, nil
 }
 
 // convertReasoningWithFollowing converts a reasoning item and merges it with subsequent
@@ -411,31 +497,16 @@ func convertReasoningWithFollowing(items []Item, startIdx int) (*llm.Message, in
 		switch nextItem.Type {
 		case "function_call":
 			// Merge function_call into the same assistant message
-			msg.ToolCalls = append(msg.ToolCalls, llm.ToolCall{
-				ID:   nextItem.CallID,
-				Type: "function",
-				Function: llm.FunctionCall{
-					Name:      encodeResponsesFunctionCallName(nextItem.Namespace, nextItem.Name),
-					Arguments: nextItem.Arguments,
-				},
-			})
+			appendToolCallFromItem(msg, nextItem)
 			consumed++
 
 		case "custom_tool_call":
 			// Merge custom_tool_call into the same assistant message
-			inputStr := ""
-			if nextItem.Input != nil {
-				inputStr = *nextItem.Input
-			}
-			msg.ToolCalls = append(msg.ToolCalls, llm.ToolCall{
-				ID:   nextItem.CallID,
-				Type: llm.ToolTypeResponsesCustomTool,
-				ResponseCustomToolCall: &llm.ResponseCustomToolCall{
-					CallID: nextItem.CallID,
-					Name:   nextItem.Name,
-					Input:  inputStr,
-				},
-			})
+			appendToolCallFromItem(msg, nextItem)
+			consumed++
+
+		case "web_search_call":
+			appendToolCallFromItem(msg, nextItem)
 			consumed++
 
 		case "message", "input_text", "":

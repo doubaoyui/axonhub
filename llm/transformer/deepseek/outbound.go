@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/auth"
@@ -92,6 +93,8 @@ func (t *OutboundTransformer) TransformRequest(
 	}
 
 	oaiReq := openai.RequestFromLLM(llmReq)
+	normalizedEffort, thinking := normalizeReasoningEffort(llmReq.ReasoningEffort)
+	oaiReq.ReasoningEffort = normalizedEffort
 	normalizeDeveloperMessages(oaiReq)
 
 	// DeepSeek doesn't support json_schema, convert to json_object
@@ -104,12 +107,7 @@ func (t *OutboundTransformer) TransformRequest(
 		Request: *oaiReq,
 	}
 
-	// Convert ReasoningEffort to Thinking if present
-	if llmReq.ReasoningEffort != "" && llmReq.ReasoningEffort != "none" {
-		dsReq.Thinking = &Thinking{
-			Type: "enabled",
-		}
-	}
+	dsReq.Thinking = thinking
 
 	body, err := json.Marshal(dsReq)
 	if err != nil {
@@ -138,6 +136,22 @@ func (t *OutboundTransformer) TransformRequest(
 		Auth:      auth,
 		APIFormat: string(llm.APIFormatOpenAIChatCompletion),
 	}, nil
+}
+
+func normalizeReasoningEffort(effort string) (string, *Thinking) {
+	normalized := strings.ToLower(strings.TrimSpace(effort))
+	switch normalized {
+	case "":
+		return "", nil
+	case "none":
+		return "", &Thinking{Type: "disabled"}
+	case "xhigh", "max":
+		return "max", &Thinking{Type: "enabled"}
+	case "minimal", "low", "medium", "high":
+		return "high", &Thinking{Type: "enabled"}
+	default:
+		return normalized, &Thinking{Type: "enabled"}
+	}
 }
 
 func normalizeDeveloperMessages(req *openai.Request) {

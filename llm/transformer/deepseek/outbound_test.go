@@ -124,29 +124,49 @@ func TestOutboundTransformer_TransformRequest_Thinking(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name            string
-		reasoningEffort string
-		expectThinking  bool
+		name                    string
+		reasoningEffort         string
+		expectedReasoningEffort string
+		expectedThinkingType    string
 	}{
 		{
-			name:            "reasoning effort high enables thinking",
-			reasoningEffort: "high",
-			expectThinking:  true,
+			name:                    "reasoning effort high enables thinking",
+			reasoningEffort:         "high",
+			expectedReasoningEffort: "high",
+			expectedThinkingType:    "enabled",
 		},
 		{
-			name:            "reasoning effort medium enables thinking",
-			reasoningEffort: "medium",
-			expectThinking:  true,
+			name:                    "reasoning effort medium maps to high",
+			reasoningEffort:         "medium",
+			expectedReasoningEffort: "high",
+			expectedThinkingType:    "enabled",
 		},
 		{
-			name:            "reasoning effort none disables thinking",
-			reasoningEffort: "none",
-			expectThinking:  false,
+			name:                    "reasoning effort low maps to high",
+			reasoningEffort:         "low",
+			expectedReasoningEffort: "high",
+			expectedThinkingType:    "enabled",
 		},
 		{
-			name:            "empty reasoning effort disables thinking",
+			name:                    "reasoning effort xhigh maps to max",
+			reasoningEffort:         "xhigh",
+			expectedReasoningEffort: "max",
+			expectedThinkingType:    "enabled",
+		},
+		{
+			name:                    "reasoning effort is normalized before mapping",
+			reasoningEffort:         " XHigh ",
+			expectedReasoningEffort: "max",
+			expectedThinkingType:    "enabled",
+		},
+		{
+			name:                 "reasoning effort none disables thinking",
+			reasoningEffort:      "none",
+			expectedThinkingType: "disabled",
+		},
+		{
+			name:            "empty reasoning effort leaves provider default",
 			reasoningEffort: "",
-			expectThinking:  false,
 		},
 	}
 
@@ -176,9 +196,10 @@ func TestOutboundTransformer_TransformRequest_Thinking(t *testing.T) {
 			err = json.Unmarshal(got.Body, &dsReq)
 			require.NoError(t, err)
 
-			if tt.expectThinking {
+			assert.Equal(t, tt.expectedReasoningEffort, dsReq.ReasoningEffort)
+			if tt.expectedThinkingType != "" {
 				assert.NotNil(t, dsReq.Thinking)
-				assert.Equal(t, "enabled", dsReq.Thinking.Type)
+				assert.Equal(t, tt.expectedThinkingType, dsReq.Thinking.Type)
 			} else {
 				assert.Nil(t, dsReq.Thinking)
 			}
@@ -276,6 +297,67 @@ func TestOutboundTransformer_TransformRequest_DropsReasoningOnlyAssistantMessage
 	assert.Equal(t, "分析当前数据", lo.FromPtr(dsReq.Messages[0].Content.Content))
 	assert.Equal(t, "user", dsReq.Messages[1].Role)
 	assert.Equal(t, "不可以使用 mcp ?", lo.FromPtr(dsReq.Messages[1].Content.Content))
+}
+
+func TestOutboundTransformer_TransformRequest_PreservesReasoningContentWithToolCalls(t *testing.T) {
+	config := &Config{
+		BaseURL:        "https://api.deepseek.com/v1",
+		APIKeyProvider: auth.NewStaticKeyProvider("test-api-key"),
+	}
+
+	transformer, err := NewOutboundTransformerWithConfig(config)
+	require.NoError(t, err)
+
+	request := &llm.Request{
+		Model:           "deepseek-v4-pro",
+		ReasoningEffort: "medium",
+		Messages: []llm.Message{
+			{
+				Role: "user",
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("检查文件"),
+				},
+			},
+			{
+				Role:             "assistant",
+				ReasoningContent: lo.ToPtr("I need to inspect two files first."),
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_1",
+						Type: llm.ToolTypeFunction,
+						Function: llm.FunctionCall{
+							Name:      "grep_files",
+							Arguments: `{"pattern":"foo"}`,
+						},
+					},
+					{
+						ID:   "call_2",
+						Type: llm.ToolTypeFunction,
+						Function: llm.FunctionCall{
+							Name:      "read_file",
+							Arguments: `{"file_path":"README.md"}`,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	got, err := transformer.TransformRequest(context.Background(), request)
+	require.NoError(t, err)
+
+	var dsReq Request
+	err = json.Unmarshal(got.Body, &dsReq)
+	require.NoError(t, err)
+	require.NotNil(t, dsReq.Thinking)
+	require.Equal(t, "enabled", dsReq.Thinking.Type)
+	require.Equal(t, "high", dsReq.ReasoningEffort)
+	require.Len(t, dsReq.Messages, 2)
+	require.Equal(t, "assistant", dsReq.Messages[1].Role)
+	require.Equal(t, "I need to inspect two files first.", lo.FromPtr(dsReq.Messages[1].ReasoningContent))
+	require.Len(t, dsReq.Messages[1].ToolCalls, 2)
+	require.Equal(t, "call_1", dsReq.Messages[1].ToolCalls[0].ID)
+	require.Equal(t, "call_2", dsReq.Messages[1].ToolCalls[1].ID)
 }
 
 func TestOutboundTransformer_TransformRequest_FiltersResponsesBuiltinToolCalls(t *testing.T) {

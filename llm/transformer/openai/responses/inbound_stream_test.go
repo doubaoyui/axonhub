@@ -377,6 +377,166 @@ func TestInboundTransformer_StreamTransformation_ImageGenerationToolCallRoundTri
 	require.Equal(t, lo.ToPtr("A watercolor fox under moonlight"), completedEvent.Response.Output[0].RevisedPrompt)
 }
 
+func TestInboundTransformer_StreamTransformation_DeepSeekReasoningToolCallsRoundTrip(t *testing.T) {
+	trans := NewInboundTransformer()
+
+	llmResponses := []*llm.Response{
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "chatcmpl_deepseek_reasoning_tools",
+			Model:   "deepseek-v4-pro",
+			Created: 1700000000,
+			Choices: []llm.Choice{
+				{
+					Index: 0,
+					Delta: &llm.Message{
+						Role:             "assistant",
+						ReasoningContent: lo.ToPtr("I need to inspect "),
+					},
+				},
+			},
+		},
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "chatcmpl_deepseek_reasoning_tools",
+			Model:   "deepseek-v4-pro",
+			Created: 1700000000,
+			Choices: []llm.Choice{
+				{
+					Index: 0,
+					Delta: &llm.Message{
+						ReasoningContent: lo.ToPtr("two files first."),
+					},
+				},
+			},
+		},
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "chatcmpl_deepseek_reasoning_tools",
+			Model:   "deepseek-v4-pro",
+			Created: 1700000000,
+			Choices: []llm.Choice{
+				{
+					Index: 0,
+					Delta: &llm.Message{
+						ToolCalls: []llm.ToolCall{
+							{
+								ID:    "call_1",
+								Type:  "function",
+								Index: 0,
+								Function: llm.FunctionCall{
+									Name: "grep_files",
+								},
+							},
+							{
+								ID:    "call_2",
+								Type:  "function",
+								Index: 1,
+								Function: llm.FunctionCall{
+									Name: "read_file",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "chatcmpl_deepseek_reasoning_tools",
+			Model:   "deepseek-v4-pro",
+			Created: 1700000000,
+			Choices: []llm.Choice{
+				{
+					Index: 0,
+					Delta: &llm.Message{
+						ToolCalls: []llm.ToolCall{
+							{
+								Index: 0,
+								Function: llm.FunctionCall{
+									Arguments: `{"pattern":"foo"}`,
+								},
+							},
+							{
+								Index: 1,
+								Function: llm.FunctionCall{
+									Arguments: `{"file_path":"README.md"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "chatcmpl_deepseek_reasoning_tools",
+			Model:   "deepseek-v4-pro",
+			Created: 1700000000,
+			Choices: []llm.Choice{
+				{
+					Index:        0,
+					Delta:        &llm.Message{},
+					FinishReason: lo.ToPtr("tool_calls"),
+				},
+			},
+		},
+		{
+			Object:  "chat.completion.chunk",
+			ID:      "chatcmpl_deepseek_reasoning_tools",
+			Model:   "deepseek-v4-pro",
+			Created: 1700000000,
+			Usage: &llm.Usage{
+				PromptTokens:     1,
+				CompletionTokens: 1,
+				TotalTokens:      2,
+			},
+		},
+	}
+
+	transformedStream, err := trans.TransformStream(t.Context(), streams.SliceStream(llmResponses))
+	require.NoError(t, err)
+
+	var completedEvent *StreamEvent
+	for transformedStream.Next() {
+		event := transformedStream.Current()
+		var ev StreamEvent
+		err := json.Unmarshal(event.Data, &ev)
+		require.NoError(t, err)
+		if ev.Type == StreamEventTypeResponseCompleted {
+			completedEvent = &ev
+		}
+	}
+	require.NoError(t, transformedStream.Err())
+
+	require.NotNil(t, completedEvent)
+	require.NotNil(t, completedEvent.Response)
+	require.Len(t, completedEvent.Response.Output, 3)
+	require.Equal(t, "reasoning", completedEvent.Response.Output[0].Type)
+	require.Len(t, completedEvent.Response.Output[0].Summary, 1)
+	require.Equal(t, "I need to inspect two files first.", completedEvent.Response.Output[0].Summary[0].Text)
+	require.Equal(t, "function_call", completedEvent.Response.Output[1].Type)
+	require.Equal(t, "call_1", completedEvent.Response.Output[1].CallID)
+	require.Equal(t, "grep_files", completedEvent.Response.Output[1].Name)
+	require.Equal(t, `{"pattern":"foo"}`, completedEvent.Response.Output[1].Arguments)
+	require.Equal(t, "function_call", completedEvent.Response.Output[2].Type)
+	require.Equal(t, "call_2", completedEvent.Response.Output[2].CallID)
+	require.Equal(t, "read_file", completedEvent.Response.Output[2].Name)
+	require.Equal(t, `{"file_path":"README.md"}`, completedEvent.Response.Output[2].Arguments)
+
+	roundTripMessages, err := convertInputToMessages(&Input{Items: completedEvent.Response.Output})
+	require.NoError(t, err)
+	require.Len(t, roundTripMessages, 1)
+	require.Equal(t, "assistant", roundTripMessages[0].Role)
+	require.NotNil(t, roundTripMessages[0].ReasoningContent)
+	require.Equal(t, "I need to inspect two files first.", *roundTripMessages[0].ReasoningContent)
+	require.Len(t, roundTripMessages[0].ToolCalls, 2)
+	require.Equal(t, "call_1", roundTripMessages[0].ToolCalls[0].ID)
+	require.Equal(t, "grep_files", roundTripMessages[0].ToolCalls[0].Function.Name)
+	require.Equal(t, "call_2", roundTripMessages[0].ToolCalls[1].ID)
+	require.Equal(t, "read_file", roundTripMessages[0].ToolCalls[1].Function.Name)
+}
+
 func imageGenerationToolCallResponse(responseID string, itemID string, eventType string, status string, partialImageB64 string) *llm.Response {
 	imageCall := &llm.ImageGenerationToolCall{
 		ID:              itemID,

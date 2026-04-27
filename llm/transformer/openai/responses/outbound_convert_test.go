@@ -1102,6 +1102,32 @@ func TestConvertAssistantMessage_WithCompactContent(t *testing.T) {
 			},
 		},
 		{
+			name: "assistant message with reasoning content emits reasoning without encrypted content",
+			msg: llm.Message{
+				Role:             "assistant",
+				ReasoningContent: lo.ToPtr("I need to inspect the files first."),
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_1",
+						Type: "function",
+						Function: llm.FunctionCall{
+							Name:      "read_file",
+							Arguments: `{"file_path":"README.md"}`,
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, items []Item) {
+				require.Len(t, items, 2)
+				require.Equal(t, "reasoning", items[0].Type)
+				require.Nil(t, items[0].EncryptedContent)
+				require.Len(t, items[0].Summary, 1)
+				require.Equal(t, "I need to inspect the files first.", items[0].Summary[0].Text)
+				require.Equal(t, "function_call", items[1].Type)
+				require.Equal(t, "call_1", items[1].CallID)
+			},
+		},
+		{
 			name: "assistant message with compaction content without created_by",
 			msg: llm.Message{
 				Role: "assistant",

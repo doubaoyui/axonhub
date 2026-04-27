@@ -202,7 +202,7 @@ func convertAssistantMessage(msg llm.Message, scope shared.TransportScope) []Ite
 		encryptedContent = shared.DecodeOpenAIEncryptedContentInScope(msg.ReasoningSignature, scope)
 	}
 
-	if encryptedContent != nil {
+	if encryptedContent != nil || (msg.ReasoningContent != nil && *msg.ReasoningContent != "") {
 		summary := []ReasoningSummary{}
 		if msg.ReasoningContent != nil && *msg.ReasoningContent != "" {
 			summary = append(summary, ReasoningSummary{
