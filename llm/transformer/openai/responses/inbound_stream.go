@@ -227,6 +227,7 @@ func (s *responsesInboundStream) Next() bool {
 			Status:    lo.ToPtr("in_progress"),
 			Output:    []Item{},
 		}
+		response.PreviousResponseID = chunk.PreviousResponseID
 
 		if s.usage != nil {
 			response.Usage = ConvertLLMUsageToResponsesUsage(s.usage)
@@ -335,6 +336,7 @@ func (s *responsesInboundStream) Next() bool {
 		s.aggregator.status = "completed"
 		response := s.aggregator.buildResponse()
 		response.Usage = ConvertLLMUsageToResponsesUsage(s.usage)
+		response.PreviousResponseID = chunk.PreviousResponseID
 
 		err := s.enqueueEvent(&StreamEvent{
 			Type:     StreamEventTypeResponseCompleted,

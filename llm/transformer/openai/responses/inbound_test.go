@@ -91,6 +91,47 @@ func TestInboundTransformer_TransformRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "websocket metadata is carried through transformer metadata",
+			httpReq: &httpclient.Request{
+				Body: []byte(`{
+					"model": "gpt-4o",
+					"stream": true,
+					"input": "Hello"
+				}`),
+				Metadata: map[string]string{
+					ResponsesWebSocketMetadataKey: "true",
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, result *llm.Request) {
+				require.Equal(t, true, result.TransformerMetadata[ResponsesWebSocketMetadataKey])
+			},
+		},
+		{
+			name: "websocket client metadata is carried through transformer metadata",
+			httpReq: &httpclient.Request{
+				Body: []byte(`{
+					"model": "gpt-4o",
+					"stream": true,
+					"input": "Hello",
+					"client_metadata": {
+						"x-codex-turn-metadata": "{\"turn_id\":\"turn-123\"}",
+						"ws_request_header_traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
+					}
+				}`),
+				Metadata: map[string]string{
+					ResponsesWebSocketMetadataKey: "true",
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, result *llm.Request) {
+				require.Equal(t, map[string]string{
+					"x-codex-turn-metadata":         `{"turn_id":"turn-123"}`,
+					"ws_request_header_traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+				}, result.TransformerMetadata["client_metadata"])
+			},
+		},
+		{
 			name: "request with temperature and top_p",
 			httpReq: &httpclient.Request{
 				Body: []byte(`{

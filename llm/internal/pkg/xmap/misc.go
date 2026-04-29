@@ -1,6 +1,8 @@
 package xmap
 
 import (
+	"encoding/json"
+
 	"github.com/samber/lo"
 )
 
@@ -73,6 +75,45 @@ func GetStringSlice(m map[string]any, key string) []string {
 	if v, ok := m[key]; ok {
 		if slice, ok := v.([]string); ok {
 			return slice
+		}
+	}
+
+	return nil
+}
+
+// GetStringMap extracts a map[string]string value from a map[string]any.
+func GetStringMap(m map[string]any, key string) map[string]string {
+	if m == nil {
+		return nil
+	}
+
+	if v, ok := m[key]; ok {
+		switch stringMap := v.(type) {
+		case map[string]string:
+			return stringMap
+		case map[string]any:
+			result := make(map[string]string, len(stringMap))
+			for k, rawValue := range stringMap {
+				if value, ok := rawValue.(string); ok {
+					result[k] = value
+				}
+			}
+			if len(result) == 0 {
+				return nil
+			}
+			return result
+		case map[string]json.RawMessage:
+			result := make(map[string]string, len(stringMap))
+			for k, rawValue := range stringMap {
+				var value string
+				if err := json.Unmarshal(rawValue, &value); err == nil {
+					result[k] = value
+				}
+			}
+			if len(result) == 0 {
+				return nil
+			}
+			return result
 		}
 	}
 

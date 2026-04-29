@@ -11,6 +11,8 @@ import (
 	"github.com/looplj/axonhub/llm/transformer"
 )
 
+const ResponsesWebSocketMetadataKey = "responses.websocket"
+
 // ImageGeneration is a permissive structure to carry image generation tool
 // parameters. It mirrors the OpenRouter/OpenAI Responses API fields we care
 // about, but is intentionally loose to allow forward-compatibility.
@@ -95,10 +97,12 @@ type Request struct {
 
 	Stream           *bool             `json:"stream,omitempty"`
 	Store            *bool             `json:"store,omitempty"`
+	Generate         *bool             `json:"generate,omitempty"`
 	ServiceTier      *string           `json:"service_tier,omitempty"`
 	SafetyIdentifier *string           `json:"safety_identifier,omitempty"`
 	User             *string           `json:"user,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
+	ClientMetadata   map[string]string `json:"client_metadata,omitempty"`
 	MaxOutputTokens  *int64            `json:"max_output_tokens,omitempty"`
 	MaxToolCalls     *int64            `json:"max_tool_calls,omitempty"`
 	Text             *TextOptions      `json:"text,omitempty"`

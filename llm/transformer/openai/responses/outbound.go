@@ -170,12 +170,14 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 		Tools:                tools,
 		ParallelToolCalls:    llmReq.ParallelToolCalls,
 		Stream:               llmReq.Stream,
+		Generate:             xmap.GetBoolPtr(llmReq.TransformerMetadata, "generate"),
 		Text:                 convertToTextOptions(llmReq),
 		Store:                llmReq.Store,
 		ServiceTier:          llmReq.ServiceTier,
 		SafetyIdentifier:     llmReq.SafetyIdentifier,
 		User:                 llmReq.User,
 		Metadata:             llmReq.Metadata,
+		ClientMetadata:       xmap.GetStringMap(llmReq.TransformerMetadata, "client_metadata"),
 		MaxOutputTokens:      llmReq.MaxCompletionTokens,
 		TopLogprobs:          llmReq.TopLogprobs,
 		TopP:                 llmReq.TopP,
@@ -220,6 +222,14 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 		return nil, err
 	}
 
+	metadata := scope.Metadata()
+	if enabled := xmap.GetBoolPtr(llmReq.TransformerMetadata, ResponsesWebSocketMetadataKey); enabled != nil && *enabled {
+		if metadata == nil {
+			metadata = map[string]string{}
+		}
+		metadata[ResponsesWebSocketMetadataKey] = "true"
+	}
+
 	return &httpclient.Request{
 		Method:  http.MethodPost,
 		URL:     fullURL,
@@ -232,7 +242,7 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 		APIFormat:             string(llm.APIFormatOpenAIResponse),
 		TransformerMetadata:   llmReq.TransformerMetadata,
 		SkipInboundQueryMerge: true,
-		Metadata:              scope.Metadata(),
+		Metadata:              metadata,
 	}, nil
 }
 

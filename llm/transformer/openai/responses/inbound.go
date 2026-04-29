@@ -55,7 +55,15 @@ func (t *InboundTransformer) TransformRequest(ctx context.Context, httpReq *http
 		return nil, fmt.Errorf("%w: model is required", transformer.ErrInvalidRequest)
 	}
 
-	return convertToLLMRequest(&req)
+	llmReq, err := convertToLLMRequest(&req)
+	if err != nil {
+		return nil, err
+	}
+	if httpReq.Metadata != nil && httpReq.Metadata[ResponsesWebSocketMetadataKey] == "true" {
+		llmReq.TransformerMetadata[ResponsesWebSocketMetadataKey] = true
+	}
+
+	return llmReq, nil
 }
 
 // TransformResponse transforms llm.Response to OpenAI Responses API HTTP response.
@@ -229,6 +237,13 @@ func convertToLLMRequest(req *Request) (*llm.Request, error) {
 		if req.StreamOptions.IncludeObfuscation != nil {
 			chatReq.TransformerMetadata["include_obfuscation"] = req.StreamOptions.IncludeObfuscation
 		}
+	}
+
+	if req.Generate != nil {
+		chatReq.TransformerMetadata["generate"] = req.Generate
+	}
+	if len(req.ClientMetadata) > 0 {
+		chatReq.TransformerMetadata["client_metadata"] = maps.Clone(req.ClientMetadata)
 	}
 
 	// Convert instructions to system message

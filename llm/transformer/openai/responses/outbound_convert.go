@@ -92,11 +92,14 @@ func convertInstructionsFromMessages(msgs []llm.Message) string {
 // Assistant messages become items with type "message" and content array containing output_text items.
 // Tool calls become function_call items, tool results become function_call_output items.
 func convertInputFromMessages(msgs []llm.Message, transformOptions llm.TransformOptions, scope shared.TransportScope) Input {
+	wasArrayFormat := transformOptions.ArrayInputs != nil && *transformOptions.ArrayInputs
+
 	if len(msgs) == 0 {
+		if wasArrayFormat {
+			return Input{Items: []Item{}}
+		}
 		return Input{}
 	}
-
-	wasArrayFormat := transformOptions.ArrayInputs != nil && *transformOptions.ArrayInputs
 
 	if len(msgs) == 1 && msgs[0].Content.Content != nil && !wasArrayFormat {
 		return Input{Text: msgs[0].Content.Content}
@@ -139,6 +142,10 @@ func convertInputFromMessages(msgs []llm.Message, transformOptions llm.Transform
 
 			items = append(items, convertToolMessageWithType(msg, itemType))
 		}
+	}
+
+	if len(items) == 0 && wasArrayFormat {
+		items = []Item{}
 	}
 
 	return Input{

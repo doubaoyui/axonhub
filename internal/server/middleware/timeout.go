@@ -9,6 +9,11 @@ import (
 
 func WithTimeout(ts time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.IsWebsocket() {
+			c.Next()
+			return
+		}
+
 		ctx, cancel := context.WithTimeout(c.Request.Context(), ts)
 		defer cancel()
 

@@ -160,6 +160,40 @@ func TestOutboundTransformer_TransformRequest_AccountIdentityFootprint(t *testin
 	require.Equal(t, "channel-1", hreq.Metadata[shared.MetadataKeyAccountIdentity])
 }
 
+func TestOutboundTransformer_TransformRequest_PreservesResponsesWebSocketMetadata(t *testing.T) {
+	transformer, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	generate := false
+	previousResponseID := "resp-1"
+	req := &llm.Request{
+		Model:              "gpt-4o",
+		Stream:             lo.ToPtr(true),
+		PreviousResponseID: &previousResponseID,
+		Messages: []llm.Message{
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}},
+		},
+		TransformerMetadata: map[string]any{
+			"generate":                    &generate,
+			ResponsesWebSocketMetadataKey: true,
+			"client_metadata": map[string]string{
+				"x-codex-turn-metadata": "turn-metadata",
+			},
+		},
+	}
+
+	hreq, err := transformer.TransformRequest(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, "true", hreq.Metadata[ResponsesWebSocketMetadataKey])
+
+	var payload Request
+	require.NoError(t, json.Unmarshal(hreq.Body, &payload))
+	require.NotNil(t, payload.Generate)
+	require.False(t, *payload.Generate)
+	require.Equal(t, previousResponseID, *payload.PreviousResponseID)
+	require.Equal(t, "turn-metadata", payload.ClientMetadata["x-codex-turn-metadata"])
+}
+
 func TestOutboundTransformer_TransformRequest_OmitsFootprintWhenEmpty(t *testing.T) {
 	transformer, err := NewOutboundTransformerWithConfig(&Config{
 		BaseURL:        "https://api.openai.com",

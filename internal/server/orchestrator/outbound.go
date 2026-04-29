@@ -590,6 +590,11 @@ func (p *PersistentOutboundTransformer) PrepareForRetry(ctx context.Context) err
 func (p *PersistentOutboundTransformer) CustomizeExecutor(executor pipeline.Executor) pipeline.Executor {
 	// Start with the default executor, then layer customizations.
 	customizedExecutor := executor
+	baseChanged := false
+	type baseExecutorWrapper interface {
+		WithBase(pipeline.Executor) pipeline.Executor
+	}
+	wrapper, wrapsBase := executor.(baseExecutorWrapper)
 
 	channel := p.GetCurrentChannel()
 	if channel == nil {
@@ -603,13 +608,20 @@ func (p *PersistentOutboundTransformer) CustomizeExecutor(executor pipeline.Exec
 		} else {
 			customizedExecutor = httpclient.NewHttpClientWithProxy(p.state.Proxy)
 		}
+		baseChanged = true
 	} else if channel.HTTPClient != nil {
 		// Use the channel's own HTTP client, which is pre-configured with its proxy settings.
 		customizedExecutor = channel.HTTPClient
+		baseChanged = true
 	}
 	// 2. Allow the specific outbound transformer (e.g., for AWS signing) to further customize the client.
 	if custom, ok := channel.Outbound.(pipeline.ChannelCustomizedExecutor); ok {
-		return custom.CustomizeExecutor(customizedExecutor)
+		customizedExecutor = custom.CustomizeExecutor(customizedExecutor)
+		baseChanged = true
+	}
+
+	if wrapsBase && baseChanged {
+		return wrapper.WithBase(customizedExecutor)
 	}
 
 	return customizedExecutor

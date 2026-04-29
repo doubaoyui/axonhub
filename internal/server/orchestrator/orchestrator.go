@@ -140,6 +140,10 @@ type ChatCompletionResult struct {
 }
 
 func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, request *httpclient.Request) (ChatCompletionResult, error) {
+	return processor.ProcessWithExecutor(ctx, request, nil)
+}
+
+func (processor *ChatCompletionOrchestrator) ProcessWithExecutor(ctx context.Context, request *httpclient.Request, executor pipeline.Executor) (ChatCompletionResult, error) {
 	// The context is system bypassed to allow the orchestrator to access the system settings.
 	ctx = authz.WithSystemBypass(ctx, "process-chat-completion")
 
@@ -251,7 +255,12 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 
 	pipelineOpts = append(pipelineOpts, pipeline.WithMiddlewares(middlewares...))
 
-	pipe := processor.PipelineFactory.Pipeline(
+	pipelineFactory := processor.PipelineFactory
+	if executor != nil {
+		pipelineFactory = pipeline.NewFactory(executor)
+	}
+
+	pipe := pipelineFactory.Pipeline(
 		inbound,
 		outbound,
 		pipelineOpts...,

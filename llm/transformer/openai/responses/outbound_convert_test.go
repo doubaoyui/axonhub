@@ -539,6 +539,32 @@ func TestConvertInputFromMessages(t *testing.T) {
 		expected         Input
 	}{
 		{
+			name: "empty array input stays array",
+			transformOptions: llm.TransformOptions{
+				ArrayInputs: lo.ToPtr(true),
+			},
+			expected: Input{
+				Items: []Item{},
+			},
+		},
+		{
+			name: "system-only messages preserve empty array input",
+			msgs: []llm.Message{
+				{
+					Role: "system",
+					Content: llm.MessageContent{
+						Content: lo.ToPtr("instructions"),
+					},
+				},
+			},
+			transformOptions: llm.TransformOptions{
+				ArrayInputs: lo.ToPtr(true),
+			},
+			expected: Input{
+				Items: []Item{},
+			},
+		},
+		{
 			name: "single developer message",
 			msgs: []llm.Message{
 				{
@@ -621,6 +647,16 @@ func TestConvertInputFromMessages(t *testing.T) {
 			require.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestConvertInputFromMessages_MarshalsEmptyArrayInput(t *testing.T) {
+	input := convertInputFromMessages(nil, llm.TransformOptions{
+		ArrayInputs: lo.ToPtr(true),
+	}, shared.TransportScope{})
+
+	data, err := json.Marshal(input)
+	require.NoError(t, err)
+	require.JSONEq(t, `[]`, string(data))
 }
 
 func TestConvertReasoning(t *testing.T) {

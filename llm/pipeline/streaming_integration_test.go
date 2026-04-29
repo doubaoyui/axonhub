@@ -5,16 +5,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 
-	"github.com/looplj/axonhub/llm/internal/pkg/xtest"
 	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/looplj/axonhub/llm/internal/pkg/xtest"
 	"github.com/looplj/axonhub/llm/pipeline"
 	"github.com/looplj/axonhub/llm/streams"
 	"github.com/looplj/axonhub/llm/transformer"
 	"github.com/looplj/axonhub/llm/transformer/anthropic"
 	"github.com/looplj/axonhub/llm/transformer/openai"
+	"github.com/looplj/axonhub/llm/transformer/openai/responses"
 )
 
 // TestPipeline_Streaming_OpenAI_to_OpenAI tests streaming pipeline with OpenAI inbound and outbound transformers.
@@ -113,6 +116,82 @@ func TestPipeline_Streaming_OpenAI_to_OpenAI(t *testing.T) {
 	// Verify the last event is [DONE]
 	lastEvent := collectedEvents[len(collectedEvents)-1]
 	require.Equal(t, "[DONE]", string(lastEvent.Data))
+}
+
+func TestPipeline_Streaming_ResponsesWebSocketMetadataSurvivesTransform(t *testing.T) {
+	ctx := context.Background()
+
+	inbound := responses.NewInboundTransformer()
+	outbound, err := responses.NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	completedEvent, err := json.Marshal(&responses.StreamEvent{
+		Type: responses.StreamEventTypeResponseCompleted,
+		Response: &responses.Response{
+			Object:    "response",
+			ID:        "resp-2",
+			Model:     "gpt-4o",
+			CreatedAt: time.Now().Unix(),
+			Status:    lo.ToPtr("completed"),
+			Output:    []responses.Item{},
+			Usage: &responses.Usage{
+				InputTokens:  1,
+				OutputTokens: 1,
+				TotalTokens:  2,
+			},
+			PreviousResponseID: lo.ToPtr("resp-1"),
+		},
+	})
+	require.NoError(t, err)
+
+	executor := &mockExecutor{
+		doStreamFunc: func(ctx context.Context, request *httpclient.Request) (streams.Stream[*httpclient.StreamEvent], error) {
+			require.Equal(t, "true", request.Metadata[responses.ResponsesWebSocketMetadataKey])
+
+			var payload responses.Request
+			require.NoError(t, json.Unmarshal(request.Body, &payload))
+			require.NotNil(t, payload.Generate)
+			require.False(t, *payload.Generate)
+			require.Equal(t, "resp-1", *payload.PreviousResponseID)
+
+			return streams.SliceStream([]*httpclient.StreamEvent{
+				{Type: string(responses.StreamEventTypeResponseCompleted), Data: completedEvent},
+			}), nil
+		},
+	}
+
+	requestBodyBytes, err := json.Marshal(map[string]any{
+		"model":                "gpt-4o",
+		"stream":               true,
+		"generate":             false,
+		"previous_response_id": "resp-1",
+		"input":                "Hello",
+	})
+	require.NoError(t, err)
+
+	pipe := pipeline.NewFactory(executor).Pipeline(inbound, outbound)
+	result, err := pipe.Process(ctx, &httpclient.Request{
+		Method: http.MethodPost,
+		URL:    "/v1/responses",
+		Headers: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body: requestBodyBytes,
+		Metadata: map[string]string{
+			responses.ResponsesWebSocketMetadataKey: "true",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.Stream)
+
+	var completed bool
+	for result.EventStream.Next() {
+		if result.EventStream.Current().Type == string(responses.StreamEventTypeResponseCompleted) {
+			completed = true
+		}
+	}
+	require.NoError(t, result.EventStream.Err())
+	require.True(t, completed)
 }
 
 // TestPipeline_Streaming_OpenAI_to_Anthropic tests streaming pipeline with OpenAI inbound and Anthropic outbound transformers.
