@@ -379,12 +379,12 @@ func TestMergeInboundRequest(t *testing.T) {
 		}
 		src := &Request{
 			Headers: http.Header{
-				"Cf-Ray":          []string{"abc123"},
+				"Cf-Ray":           []string{"abc123"},
 				"Cf-Connecting-Ip": []string{"1.2.3.4"},
-				"Cf-Ipcountry":    []string{"US"},
-				"Cf-Visitor":      []string{`{"scheme":"https"}`},
-				"Cdn-Loop":        []string{"cloudflare; loops=1"},
-				"User-Agent":      []string{"Test/1.0"},
+				"Cf-Ipcountry":     []string{"US"},
+				"Cf-Visitor":       []string{`{"scheme":"https"}`},
+				"Cdn-Loop":         []string{"cloudflare; loops=1"},
+				"User-Agent":       []string{"Test/1.0"},
 			},
 			Query: url.Values{},
 		}
@@ -395,6 +395,32 @@ func TestMergeInboundRequest(t *testing.T) {
 		require.Empty(t, got.Headers.Get("Cf-Ipcountry"))
 		require.Empty(t, got.Headers.Get("Cf-Visitor"))
 		require.Empty(t, got.Headers.Get("Cdn-Loop"))
+		require.Equal(t, "Test/1.0", got.Headers.Get("User-Agent"))
+	})
+
+	t.Run("should block websocket upgrade headers", func(t *testing.T) {
+		dest := &Request{
+			Headers: http.Header{"Content-Type": []string{"application/json"}},
+			Query:   url.Values{},
+		}
+		src := &Request{
+			Headers: http.Header{
+				"Connection":               []string{"Upgrade"},
+				"Upgrade":                  []string{"websocket"},
+				"Sec-Websocket-Key":        []string{"key"},
+				"Sec-Websocket-Version":    []string{"13"},
+				"Sec-Websocket-Extensions": []string{"permessage-deflate"},
+				"User-Agent":               []string{"Test/1.0"},
+			},
+			Query: url.Values{},
+		}
+
+		got := MergeInboundRequest(dest, src)
+		require.Empty(t, got.Headers.Get("Connection"))
+		require.Empty(t, got.Headers.Get("Upgrade"))
+		require.Empty(t, got.Headers.Get("Sec-Websocket-Key"))
+		require.Empty(t, got.Headers.Get("Sec-Websocket-Version"))
+		require.Empty(t, got.Headers.Get("Sec-Websocket-Extensions"))
 		require.Equal(t, "Test/1.0", got.Headers.Get("User-Agent"))
 	})
 

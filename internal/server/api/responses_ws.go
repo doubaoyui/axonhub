@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -27,6 +28,7 @@ const (
 	responsesWSFailedEvent      = "response.failed"
 	responsesWSIncompleteEvent  = "response.incomplete"
 	responsesWSWrappedErrorType = "error"
+	responsesWSPingInterval     = 25 * time.Second
 )
 
 var responsesWSUpgrader = websocket.Upgrader{
@@ -258,6 +260,8 @@ type responsesWSExecutor struct {
 	conn    *websocket.Conn
 	connKey string
 	mu      sync.Mutex
+	writeMu sync.Mutex
+	done    chan struct{}
 }
 
 func newResponsesWSExecutor(base pipeline.Executor) *responsesWSExecutor {
@@ -278,6 +282,10 @@ func (e *responsesWSExecutor) Close() {
 		_ = e.conn.Close()
 		e.conn = nil
 	}
+	if e.done != nil {
+		close(e.done)
+		e.done = nil
+	}
 	e.connKey = ""
 }
 
@@ -294,13 +302,13 @@ func (e *responsesWSExecutor) DoStream(ctx context.Context, request *httpclient.
 		return nil, err
 	}
 	requestBody := addResponsesWSType(request.Body)
-	if err := conn.WriteMessage(websocket.TextMessage, requestBody); err != nil {
+	if err := e.writeMessage(conn, websocket.TextMessage, requestBody); err != nil {
 		e.Close()
 		conn, err = e.upstreamConn(ctx, request)
 		if err != nil {
 			return nil, err
 		}
-		if err := conn.WriteMessage(websocket.TextMessage, requestBody); err != nil {
+		if err := e.writeMessage(conn, websocket.TextMessage, requestBody); err != nil {
 			e.Close()
 			return nil, err
 		}
@@ -329,6 +337,10 @@ func (e *responsesWSExecutor) upstreamConn(ctx context.Context, request *httpcli
 		_ = e.conn.Close()
 		e.conn = nil
 		e.connKey = ""
+	}
+	if e.done != nil {
+		close(e.done)
+		e.done = nil
 	}
 
 	headers := cloneHeaders(request.Headers)
@@ -359,7 +371,55 @@ func (e *responsesWSExecutor) upstreamConn(ctx context.Context, request *httpcli
 
 	e.conn = conn
 	e.connKey = connKey
+	e.done = make(chan struct{})
+	e.startKeepAlive(conn, e.done)
 	return conn, nil
+}
+
+func (e *responsesWSExecutor) writeMessage(conn *websocket.Conn, messageType int, payload []byte) error {
+	e.writeMu.Lock()
+	defer e.writeMu.Unlock()
+	return conn.WriteMessage(messageType, payload)
+}
+
+func (e *responsesWSExecutor) writeControl(conn *websocket.Conn, messageType int, payload []byte, deadline time.Time) error {
+	e.writeMu.Lock()
+	defer e.writeMu.Unlock()
+	return conn.WriteControl(messageType, payload, deadline)
+}
+
+func (e *responsesWSExecutor) startKeepAlive(conn *websocket.Conn, done <-chan struct{}) {
+	go func() {
+		ticker := time.NewTicker(responsesWSPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				deadline := time.Now().Add(10 * time.Second)
+				if err := e.writeControl(conn, websocket.PingMessage, nil, deadline); err != nil {
+					e.closeConnIfCurrent(conn)
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (e *responsesWSExecutor) closeConnIfCurrent(conn *websocket.Conn) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.conn != conn {
+		return
+	}
+	_ = e.conn.Close()
+	e.conn = nil
+	e.connKey = ""
+	if e.done != nil {
+		close(e.done)
+		e.done = nil
+	}
 }
 
 func responsesWSDialer(base pipeline.Executor) websocket.Dialer {
