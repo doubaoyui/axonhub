@@ -295,7 +295,7 @@ func (e *responsesWSExecutor) Do(ctx context.Context, request *httpclient.Reques
 
 func (e *responsesWSExecutor) DoStream(ctx context.Context, request *httpclient.Request) (streams.Stream[*httpclient.StreamEvent], error) {
 	if request == nil || request.Metadata == nil || request.Metadata[responses.ResponsesWebSocketMetadataKey] != "true" {
-		return e.base.DoStream(ctx, request)
+		return nil, responsesWSUnsupportedOutboundError(request)
 	}
 	conn, err := e.upstreamConn(ctx, request)
 	if err != nil {
@@ -319,6 +319,23 @@ func (e *responsesWSExecutor) DoStream(ctx context.Context, request *httpclient.
 		conn:        conn,
 		upstreamURL: request.URL,
 	}, nil
+}
+
+func responsesWSUnsupportedOutboundError(request *httpclient.Request) *httpclient.Error {
+	url := ""
+	if request != nil {
+		url = request.URL
+	}
+
+	return &httpclient.Error{
+		Method:     http.MethodGet,
+		URL:        url,
+		StatusCode: http.StatusUpgradeRequired,
+		Status:     http.StatusText(http.StatusUpgradeRequired),
+		Body: []byte(
+			`{"error":{"type":"invalid_request_error","message":"selected upstream does not support Responses WebSocket"}}`,
+		),
+	}
 }
 
 func (e *responsesWSExecutor) upstreamConn(ctx context.Context, request *httpclient.Request) (*websocket.Conn, error) {

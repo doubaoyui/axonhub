@@ -28,6 +28,19 @@ func (fallbackExecutor) DoStream(context.Context, *httpclient.Request) (streams.
 	return nil, errors.New("fallback DoStream should not be used")
 }
 
+type trackingFallbackExecutor struct {
+	doStreamCalls atomic.Int32
+}
+
+func (e *trackingFallbackExecutor) Do(context.Context, *httpclient.Request) (*httpclient.Response, error) {
+	return nil, errors.New("fallback Do should not be used")
+}
+
+func (e *trackingFallbackExecutor) DoStream(context.Context, *httpclient.Request) (streams.Stream[*httpclient.StreamEvent], error) {
+	e.doStreamCalls.Add(1)
+	return nil, errors.New("fallback DoStream should not be used")
+}
+
 func TestResponsesWSExecutor_ReusesUpstreamConnectionAndPreservesIncrementalFields(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	frames := make(chan map[string]any, 2)
@@ -146,6 +159,28 @@ func TestResponsesWSExecutor_MapsWrappedUpstreamError(t *testing.T) {
 	require.Contains(t, string(httpErr.Body), "Model does not support image inputs")
 	require.Equal(t, "req_123", httpErr.Headers.Get("x-request-id"))
 	require.Equal(t, "1", httpErr.Headers.Get("x-retry"))
+}
+
+func TestResponsesWSExecutor_RejectsNonWebSocketOutboundWithoutFallback(t *testing.T) {
+	base := &trackingFallbackExecutor{}
+	executor := newResponsesWSExecutor(base)
+
+	stream, err := executor.DoStream(context.Background(), &httpclient.Request{
+		Method:  http.MethodPost,
+		URL:     "https://api.deepseek.com/chat/completions",
+		Headers: http.Header{"Authorization": []string{"Bearer upstream-key"}},
+		Body:    []byte(`{"model":"deepseek-chat","messages":[],"stream":true}`),
+	})
+	require.Nil(t, stream)
+	require.Error(t, err)
+	require.Equal(t, int32(0), base.doStreamCalls.Load())
+
+	var httpErr *httpclient.Error
+	require.ErrorAs(t, err, &httpErr)
+	require.Equal(t, http.StatusUpgradeRequired, httpErr.StatusCode)
+	require.Equal(t, http.MethodGet, httpErr.Method)
+	require.Equal(t, "https://api.deepseek.com/chat/completions", httpErr.URL)
+	require.Contains(t, string(httpErr.Body), "selected upstream does not support Responses WebSocket")
 }
 
 func responsesWSRequestForTest(url string, body []byte) *httpclient.Request {

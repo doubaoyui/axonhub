@@ -96,6 +96,7 @@ func (t *OutboundTransformer) TransformRequest(
 	normalizedEffort, thinking := normalizeReasoningEffort(llmReq.ReasoningEffort)
 	oaiReq.ReasoningEffort = normalizedEffort
 	normalizeDeveloperMessages(oaiReq)
+	ensureThinkingToolCallReasoningContent(oaiReq, thinking)
 
 	// DeepSeek doesn't support json_schema, convert to json_object
 	if oaiReq.ResponseFormat != nil && oaiReq.ResponseFormat.Type == "json_schema" {
@@ -191,4 +192,42 @@ func shouldDropInvalidAssistantMessage(msg openai.Message) bool {
 	}
 
 	return true
+}
+
+func ensureThinkingToolCallReasoningContent(req *openai.Request, thinking *Thinking) {
+	if req == nil || thinking == nil || thinking.Type != "enabled" {
+		return
+	}
+
+	var lastReasoningContent *string
+	for i := range req.Messages {
+		msg := &req.Messages[i]
+		if msg.Role != "assistant" {
+			continue
+		}
+
+		if hasText(msg.ReasoningContent) {
+			lastReasoningContent = msg.ReasoningContent
+			if !hasText(msg.Reasoning) {
+				msg.Reasoning = msg.ReasoningContent
+			}
+		} else if hasText(msg.Reasoning) {
+			msg.ReasoningContent = msg.Reasoning
+			lastReasoningContent = msg.Reasoning
+		}
+
+		if len(msg.ToolCalls) == 0 || hasText(msg.ReasoningContent) || !hasText(lastReasoningContent) {
+			continue
+		}
+
+		reasoningContent := *lastReasoningContent
+		msg.ReasoningContent = &reasoningContent
+		if !hasText(msg.Reasoning) {
+			msg.Reasoning = &reasoningContent
+		}
+	}
+}
+
+func hasText(value *string) bool {
+	return value != nil && strings.TrimSpace(*value) != ""
 }

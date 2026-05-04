@@ -360,6 +360,84 @@ func TestOutboundTransformer_TransformRequest_PreservesReasoningContentWithToolC
 	require.Equal(t, "call_2", dsReq.Messages[1].ToolCalls[1].ID)
 }
 
+func TestOutboundTransformer_TransformRequest_BackfillsThinkingToolCallReasoningContent(t *testing.T) {
+	config := &Config{
+		BaseURL:        "https://api.deepseek.com/v1",
+		APIKeyProvider: auth.NewStaticKeyProvider("test-api-key"),
+	}
+
+	transformer, err := NewOutboundTransformerWithConfig(config)
+	require.NoError(t, err)
+
+	request := &llm.Request{
+		Model:           "deepseek-v4-pro",
+		ReasoningEffort: "high",
+		Messages: []llm.Message{
+			{
+				Role: "user",
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("继续"),
+				},
+			},
+			{
+				Role:             "assistant",
+				ReasoningContent: lo.ToPtr("I need to rewrite the first file."),
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_1",
+						Type: llm.ToolTypeFunction,
+						Function: llm.FunctionCall{
+							Name:      "shell_command",
+							Arguments: `{"command":"write first"}`,
+						},
+					},
+				},
+			},
+			{
+				Role:       "tool",
+				ToolCallID: lo.ToPtr("call_1"),
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("ok"),
+				},
+			},
+			{
+				Role: "assistant",
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_2",
+						Type: llm.ToolTypeFunction,
+						Function: llm.FunctionCall{
+							Name:      "shell_command",
+							Arguments: `{"command":"write second"}`,
+						},
+					},
+				},
+			},
+			{
+				Role:       "tool",
+				ToolCallID: lo.ToPtr("call_2"),
+				Content: llm.MessageContent{
+					Content: lo.ToPtr("ok"),
+				},
+			},
+		},
+	}
+
+	got, err := transformer.TransformRequest(context.Background(), request)
+	require.NoError(t, err)
+
+	var dsReq Request
+	err = json.Unmarshal(got.Body, &dsReq)
+	require.NoError(t, err)
+	require.NotNil(t, dsReq.Thinking)
+	require.Equal(t, "enabled", dsReq.Thinking.Type)
+	require.Len(t, dsReq.Messages, 5)
+	require.Equal(t, "assistant", dsReq.Messages[3].Role)
+	require.Len(t, dsReq.Messages[3].ToolCalls, 1)
+	require.Equal(t, "I need to rewrite the first file.", lo.FromPtr(dsReq.Messages[3].ReasoningContent))
+	require.Equal(t, "I need to rewrite the first file.", lo.FromPtr(dsReq.Messages[3].Reasoning))
+}
+
 func TestOutboundTransformer_TransformRequest_FiltersResponsesBuiltinToolCalls(t *testing.T) {
 	config := &Config{
 		BaseURL:        "https://api.deepseek.com/v1",
