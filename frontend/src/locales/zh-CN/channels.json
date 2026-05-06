@@ -601,5 +601,8 @@
   "channels.dialogs.userAgentPassThrough.disabled": "已禁用",
   "channels.dialogs.bodyPassThrough.label": "请求体透传",
   "channels.dialogs.bodyPassThrough.enabled": "启用请求体透传",
-  "channels.dialogs.bodyPassThrough.warning": "启用后，提示词注入和提示词保护将不会生效。"
+  "channels.dialogs.bodyPassThrough.warning": "启用后，提示词注入和提示词保护将不会生效。",
+  "channels.dialogs.responsesWebSocket.label": "Responses WebSocket",
+  "channels.dialogs.responsesWebSocket.enabled": "支持 Responses WebSocket",
+  "channels.dialogs.responsesWebSocket.description": "只有上游明确支持 Responses WebSocket 时开启；普通 Responses/SSE 不受影响。"
 }

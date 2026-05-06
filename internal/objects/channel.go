@@ -139,6 +139,11 @@ type ChannelSettings struct {
 	// Only effective when the inbound and outbound API formats are identical.
 	PassThroughBody bool `json:"passThroughBody,omitempty"`
 
+	// SupportsResponsesWebSocket marks upstream channels that can handle the
+	// Responses WebSocket protocol directly. Plain Responses HTTP/SSE support
+	// does not imply WebSocket support.
+	SupportsResponsesWebSocket bool `json:"supportsResponsesWebSocket,omitempty"`
+
 	// RateLimit configures the upstream rate limit for the channel.
 	// When configured, the load balancer will skip channels that have exceeded their rate limits.
 	RateLimit *ChannelRateLimit `json:"rateLimit,omitempty"`

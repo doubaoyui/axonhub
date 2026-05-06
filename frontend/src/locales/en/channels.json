@@ -601,5 +601,8 @@
   "channels.dialogs.userAgentPassThrough.disabled": "Disabled",
   "channels.dialogs.bodyPassThrough.label": "Request Body Pass-Through",
   "channels.dialogs.bodyPassThrough.enabled": "Enable request body pass-through",
-  "channels.dialogs.bodyPassThrough.warning": "When enabled, prompt injection and prompt protection will not take effect."
+  "channels.dialogs.bodyPassThrough.warning": "When enabled, prompt injection and prompt protection will not take effect.",
+  "channels.dialogs.responsesWebSocket.label": "Responses WebSocket",
+  "channels.dialogs.responsesWebSocket.enabled": "Supports Responses WebSocket",
+  "channels.dialogs.responsesWebSocket.description": "Enable only when the upstream explicitly supports Responses WebSocket. Plain Responses/SSE is unaffected."
 }

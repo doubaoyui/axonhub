@@ -103,6 +103,7 @@ const CREATE_CHANNEL_MUTATION = `
           }
           passThroughUserAgent
           passThroughBody
+          supportsResponsesWebSocket
         }
       orderingWeight
       remark
@@ -151,6 +152,7 @@ const BULK_CREATE_CHANNELS_MUTATION = `
           }
           passThroughUserAgent
           passThroughBody
+          supportsResponsesWebSocket
         }
       orderingWeight
       remark
@@ -199,6 +201,7 @@ const UPDATE_CHANNEL_MUTATION = `
           }
           passThroughUserAgent
           passThroughBody
+          supportsResponsesWebSocket
         }
       orderingWeight
       errorMessage
@@ -318,6 +321,7 @@ const BULK_IMPORT_CHANNELS_MUTATION = `
           }
           passThroughUserAgent
           passThroughBody
+          supportsResponsesWebSocket
         }
       }
     }
@@ -491,6 +495,7 @@ const BULK_UPDATE_CHANNEL_ORDERING_MUTATION = `
           }
           passThroughUserAgent
           passThroughBody
+          supportsResponsesWebSocket
         }
       }
     }
@@ -610,6 +615,7 @@ const QUERY_CHANNELS_QUERY = `
             }
             passThroughUserAgent
             passThroughBody
+            supportsResponsesWebSocket
             rateLimit {
               rpm
               tpm
@@ -1528,10 +1534,10 @@ export function useEnableSelectedChannelAPIKeys() {
   return useMutation({
     mutationFn: async ({ channelID, keys }: { channelID: string; keys: string[] }) => {
       try {
-        const data = await graphqlRequest<{ enableSelectedChannelAPIKeys: boolean }>(
-          ENABLE_SELECTED_CHANNEL_API_KEYS_MUTATION,
-          { channelID, keys }
-        );
+        const data = await graphqlRequest<{ enableSelectedChannelAPIKeys: boolean }>(ENABLE_SELECTED_CHANNEL_API_KEYS_MUTATION, {
+          channelID,
+          keys,
+        });
         return data.enableSelectedChannelAPIKeys;
       } catch (error) {
         handleError(error, { context: 'Enable Selected API Keys' });
@@ -1567,7 +1573,7 @@ export function useDeleteDisabledChannelAPIKeys() {
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['channelDisabledAPIKeys', variables.channelID] });
       queryClient.invalidateQueries({ queryKey: ['channels'] });
-      
+
       // Show appropriate message based on the result
       if (data.message === 'ONE_KEY_PRESERVED') {
         toast.success(t('channels.messages.deleteDisabledAPIKeysPreserved'));

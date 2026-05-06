@@ -60,6 +60,8 @@ func selectCandidates(inbound *PersistentInboundTransformer) pipeline.Middleware
 			selector = WithAnthropicNativeToolsSelector(selector)
 		}
 
+		selector = WithResponsesWebSocketSelector(selector)
+
 		selector = WithStreamPolicySelector(selector)
 
 		if inbound.state.LoadBalancer != nil {

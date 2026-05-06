@@ -85,6 +85,7 @@ type ChannelSettings {
   bodyOverrideOperations: [OverrideOperation!]! @goField(forceResolver: true)
   passThroughUserAgent: Boolean
   passThroughBody: Boolean
+  supportsResponsesWebSocket: Boolean
   rateLimit: ChannelRateLimit
 }
 
@@ -119,6 +120,7 @@ input ChannelSettingsInput {
   bodyOverrideOperations: [OverrideOperationInput!]
   passThroughUserAgent: Boolean
   passThroughBody: Boolean
+  supportsResponsesWebSocket: Boolean
   rateLimit: ChannelRateLimitInput
 }
 
